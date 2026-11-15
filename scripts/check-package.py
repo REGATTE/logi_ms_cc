@@ -21,6 +21,8 @@ required = {
     "./usr/lib/mx-creative-control/python/mxcc/application_views.py",
     "./usr/lib/mx-creative-control/python/mxcc/key_button.py",
     "./usr/lib/mx-creative-control/python/mxcc/devices.py",
+    "./usr/lib/mx-creative-control/python/mxcc/device_controls.py",
+    "./usr/lib/mx-creative-control/python/mxcc/device_interaction.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_views.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_navigation.py",
     "./usr/lib/udev/rules.d/70-mx-creative-control.rules",
@@ -75,6 +77,7 @@ from mxcc.gui import MainWindow
 from mxcc.configuration import default_settings
 from mxcc.applications import Application
 from mxcc.devices import Device
+from mxcc.device_controls import controls_for_device
 from mxcc.device_views import CREATIVE_CONSOLE_ID
 from mxcc.key_button import LAUNCHER_MIME
 from mxcc.paths import profiles_dir, runtime_path, settings_path
@@ -94,7 +97,8 @@ applications = [Application(f'{name}.desktop', name.title(), sys.argv[3], name,
                             name, Path(f'/unused/{name}.desktop'))
                 for name in ('alpha', 'beta', 'gamma')]
 inventory = [Device('test-keypad', 'MX Creative Keypad', 'keypad', 'USB', True, True, 0x046d, 0xc354),
-             Device('test-dialpad', 'MX Dialpad', 'dialpad', 'Bluetooth', True, False, 0x046d, 0xbc00, battery_percent=81)]
+             Device('test-dialpad', 'MX Dialpad', 'dialpad', 'Bluetooth', True, False, 0x046d, 0xbc00, battery_percent=81,
+                    controls=controls_for_device(vendor_id=0x046d, product_id=0xbc00, kind='dialpad'))]
 profiles_dir().mkdir(parents=True, exist_ok=True)
 (profiles_dir() / 'alpha.json').write_text(json.dumps({
     'version': 1, 'id': 'alpha', 'name': 'Alpha shortcuts',
@@ -129,7 +133,11 @@ assert window.views.currentWidget() is window.console
 window.console.cards['test-dialpad'].click()
 assert window.views.currentWidget() is window.details
 assert window.details.title.text() == 'MX Dialpad'
-assert 'not available' in window.details.summary.text().lower()
+assert len(window.details.mapping_combos) == 6
+assert all(combo.count() == 0 and combo.isEnabled() for combo in window.details.mapping_combos.values())
+window.details.art.hotspots['button:1'].click()
+assert window.details.selected_control == 'button:1'
+assert window.details.control_rows['button:1'].property('selected')
 window.details.back_button.click()
 assert window.views.currentWidget() is window.console
 window.console.cards['test-keypad'].click()

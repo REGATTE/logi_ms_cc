@@ -1,7 +1,8 @@
 # Implementation contract
 
-The product is an Ubuntu MX Creative Keypad utility. Customization of the dialpad
-and other devices is out of scope. A Rust worker owns HID, uinput, focus tracking,
+The product is an Ubuntu MX Creative Keypad utility. Other Logitech devices have
+discovered control-mapping placeholders; executing their assignments is not yet
+implemented. A Rust worker owns HID, uinput, focus tracking,
 IPC and the tray. The PySide6 settings process exits when its window closes.
 
 The initial Qt view is a Logitech-only device home screen. The keypad and dialpad
@@ -15,8 +16,9 @@ Import, Edit, Use shortcuts on keypad, and Follow active app actions sit at the
 bottom. App icons select their assigned shortcut views. Back controls return to
 the console and home. A shared footer outside
 the page stack keeps Refresh and Settings icons at the bottom left on every
-page. Settings opens global preferences and returns to the originating page. The dialpad and other devices open a read-only details
-page. Multiple connected supported keypads block ambiguous configuration rather
+page. Settings opens global preferences and returns to the originating page.
+The dialpad and other devices open their own controls page with connection facts
+and intentionally empty assignment dropdowns. Multiple connected supported keypads block ambiguous configuration rather
 than implying independent routing that the worker does not support.
 
 Keypad navigation contains only Keys and Applications. Applications lists only
@@ -42,6 +44,31 @@ Confirmed devices stay green during
 background refreshes; explicit Refresh searches all indicators. Blink timers run
 only while the indicator is visible and searching. The GUI retains devices seen
 during its current session as disconnected when absent from a successful scan.
+
+`device_controls.py` describes controls as immutable IDs, labels, kinds and
+sources. `devices.py` associates inputN capability directories with exact USB
+parents, receiver child identities or Bluetooth addresses, then merges their
+button/key/relative wheel capabilities without opening `/dev/input` handles.
+Duplicate interfaces and high-resolution wheel aliases yield one control slot.
+Each physical wheel/dial has one assignment slot, not separate direction slots;
+the future action backend will interpret the signed movement for that action.
+Pointer motion, touch-presence events and pointing-device keyboard emulation
+are excluded. Explicit `(vendor_id, product_id)` entries in `MODEL_CONTROLS`
+override overly broad advertisements. The MX Dialpad uses its documented layout;
+G402 exposes only Back and Forward, retaining IDs `button:4` and `button:5`.
+Unknown models use Linux-reported controls and an honest availability note; no controls
+are invented if metadata is absent. IDs describe UI slots, not firmware codes.
+The UI keeps empty, enabled selectors with no callbacks that persist or execute
+assignments. Battery-only refreshes retain those widgets and keyboard focus.
+The existing functional keypad editor is separate from these placeholders.
+
+`device_interaction.py` overlays shaped, keyboard-accessible controls on verified
+G402 and dialpad drawings. Hit regions use the same scale and letterboxing as
+the artwork, with exact masks to avoid neighboring controls intercepting clicks.
+Image clicks and row/combo focus synchronize one selected control and scroll
+its row into view. Metadata-only updates preserve selection and focus; changing
+devices or losing the selected capability clears selection. Unknown layouts
+remain selectable in the list and never receive guessed physical hotspots.
 
 Opening or reactivating settings ensures the worker is running, reloads the
 compiled runtime and selects Apps page 0. The worker is supervised by the

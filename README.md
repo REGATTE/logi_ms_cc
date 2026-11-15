@@ -6,11 +6,13 @@ A lightweight Ubuntu app for the Logitech MX Creative **Keypad**. Launch your ap
 
 The live device home screen, with the keypad and dialpad grouped as MX Creative Console.
 
-This is an independent community project, not Logitech's Logi Options+ software. The home screen lists connected Logitech devices; customization is available for the MX Creative Keypad only.
+This is an independent community project, not Logitech's Logi Options+ software. The home screen lists connected Logitech devices. Keypad assignments work now; other devices have control-mapping pages with empty action choices.
 
 ## Features
 
-- **Device home screen:** the keypad and dialpad share an MX Creative Console card. Open it to choose a component, then select the keypad for its Keys editor. The dialpad and other connected Logitech devices show connection details without offering unsupported controls. Refresh and Settings icons stay at the bottom left on every page; Settings opens global preferences.
+- **Device home screen:** the keypad and dialpad share an MX Creative Console card. Open it to choose a component, then select the keypad for its Keys editor. Other connected Logitech devices open their own controls and connection details. Refresh and Settings icons stay at the bottom left on every page; Settings opens global preferences.
+- **Device control discovery:** the dialpad shows four buttons, one **Dial** mapping and one **Roller** mapping; G402 offers only its **Back** and **Forward** buttons. Each wheel or dial has a single assignment whose eventual action determines what each direction does. Other models automatically list Ubuntu-reported buttons, keys and wheels. Each control has an empty assignment selector; these pages do not apply mappings yet. Some proprietary controls require a model description because Linux does not expose their physical layout.
+- **Visual control selection:** click a control in the G402 or dialpad illustration to highlight and reveal its matching row. Selecting a row highlights the illustrated control too. Unknown device layouts keep list selection without guessing physical button positions.
 - **Connection indicators:** each device has a green dot when connected, red when disconnected, and blinking yellow while searching. On both the home screen and Console component selector, a reported battery percentage appears beside the dot beneath the device; devices without battery data show only the dot. Hover for connection details. Devices seen during the open window's session remain visible after disconnecting; unconfirmed connections use steady yellow.
 - **Original app icons:** artwork comes from installed desktop entries and icon themes, fills the key with a narrow black border, and has no added white tile. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
 - **Small background worker:** Rust handles the keypad, virtual shortcut input, panel icon and X11 focus events. The native Qt settings window runs only while open.
@@ -114,7 +116,7 @@ Automated tests do not access hardware. They cover app discovery, profiles and i
 ## Current limits
 
 - Wayland supports app launching, virtual shortcut input and manual profiles; focusing existing windows and automatic app/page detection are not implemented. Use an X11 session for those features.
-- Only the MX Creative Keypad can be configured. Other detected Logitech devices, including the dialpad, have a details page only. Multiple connected keypads cannot be configured independently.
+- Only the MX Creative Keypad executes configured actions. Other detected Logitech devices have control pages with empty assignment choices; G402 is limited to Back and Forward. Multiple connected keypads cannot be configured independently.
 - Applications must expose desktop entries to be discovered. Profiles assume default app shortcuts, which can vary by version, focused widget or user configuration.
 - Validation covers one Ubuntu 24.04 amd64 workstation and physical keypad. Other environments need testing before being treated as supported.
 

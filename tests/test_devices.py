@@ -36,6 +36,17 @@ def hid_node(root, *, bus='0003', product='C354', name='Logitech MX Creative Key
     return target
 
 
+def input_node(hid, index, *, keys=(), relative=()):
+    path = hid / 'input' / f'input{index}' / 'capabilities'
+    path.mkdir(parents=True)
+    for name, bits in (('ev', (1, 2)), ('key', keys), ('rel', relative)):
+        value = sum(1 << bit for bit in bits)
+        words = [f'{(value >> shift) & ((1 << 64) - 1):x}'
+                 for shift in reversed(range(0, max(1, value.bit_length()), 64))]
+        (path / name).write_text(' '.join(words))
+    return path.parent
+
+
 def bluez(address='AA:BB:CC:DD:EE:FF', *, connected=True, modalias='usb:v046DpBC00d0016', name='MX Dialpad', battery=None):
     entry = {'org.bluez.Device1': {'Address': address, 'Connected': connected, 'Name': name, 'Modalias': modalias}}
     if battery is not None:
@@ -226,3 +237,59 @@ def test_unavailable_bluetooth_tools_do_not_break_usb(monkeypatch, tmp_path):
     monkeypatch.setattr(devices.subprocess, 'run', Mock(side_effect=FileNotFoundError('bluetoothctl')))
     result, = devices.discover_devices(usb_root=usb, hid_root=hid)
     assert result.kind == 'keypad'
+
+
+def test_new_usb_device_combines_only_its_own_input_interfaces(inventory):
+    usb, hid = inventory
+    first = usb_node(usb, product='f001', name='Future Mouse', serial='FIRST')
+    second = usb_node(usb, '1-5', product='f001', name='Future Mouse', serial='SECOND')
+    a = hid_node(hid, parent=first, product='F001')
+    b = hid_node(hid, parent=first, product='F001', suffix='0002')
+    other = hid_node(hid, parent=second, product='F001', suffix='0003')
+    input_node(a, 1, keys=(272, 273), relative=(0, 1, 8))
+    input_node(b, 2, keys=(272, 274), relative=(8, 11))
+    input_node(other, 3, keys=(275,), relative=(6,))
+    result = {device.id.rsplit(':', 1)[-1]: device for device in discover(inventory, bluez_objects={})}
+    controls = {control.id for control in result['FIRST'].controls}
+    assert controls == {'key:272', 'key:273', 'key:274', 'rel:8'}
+    assert {control.id for control in result['SECOND'].controls} == {'key:275', 'rel:6'}
+    assert all(control.source == 'linux' for control in result['FIRST'].controls)
+    assert 'reported by Ubuntu' in result['FIRST'].controls_note
+
+
+def test_bluetooth_controls_follow_address_and_keep_bluez_battery(inventory):
+    _, hid = inventory
+    first = hid_node(hid, bus='0005', product='F001', name='Future Mouse', unique='aa:bb:cc:dd:ee:ff')
+    second = hid_node(hid, bus='0005', product='F001', name='Future Mouse', unique='11:22:33:44:55:66', suffix='0002')
+    input_node(first, 1, keys=(272,), relative=(8,))
+    input_node(second, 2, keys=(273,), relative=())
+    objects = bluez(modalias='usb:v046DpF001d0001', name='Future Mouse', battery=73)
+    objects.update(bluez('11:22:33:44:55:66', modalias='usb:v046DpF001d0001', name='Future Mouse', battery=60))
+    result = {device.id: device for device in discover(inventory, bluez_objects=objects)}
+    assert {control.id for control in result['bluetooth:aa:bb:cc:dd:ee:ff'].controls} == {'key:272', 'rel:8'}
+    assert result['bluetooth:aa:bb:cc:dd:ee:ff'].battery_percent == 73
+    assert {control.id for control in result['bluetooth:11:22:33:44:55:66'].controls} == {'key:273'}
+
+
+def test_receiver_children_do_not_share_each_others_controls(inventory):
+    usb, hid = inventory
+    receiver = usb_node(usb, product='c52b', name='USB Receiver')
+    for index, key in ((1, 272), (2, 273)):
+        child = hid_node(hid, parent=receiver, product='F001', name='Future Mouse', unique=f'MOUSE{index}', suffix=f'{index:04x}')
+        input_node(child, index, keys=(key,))
+    result = discover(inventory, bluez_objects={})
+    children = {device.id.rsplit(':', 1)[-1]: device for device in result if device.kind == 'mouse'}
+    assert {control.id for control in children['mouse1'].controls} == {'key:272'}
+    assert {control.id for control in children['mouse2'].controls} == {'key:273'}
+    assert not next(device for device in result if device.kind == 'receiver').controls
+
+
+def test_non_hid_controls_under_direct_usb_interfaces_are_discovered(inventory):
+    usb, _ = inventory
+    camera = usb_node(usb, product='f002', name='Logitech Webcam', serial='CAMERA')
+    input_node(camera / f'{camera.name}:1.0', 1, keys=(212,))
+    # A nested unrelated USB child is not part of this device's controls.
+    input_node(camera / 'nested-device', 2, keys=(115,))
+    result, = discover(inventory, bluez_objects={})
+    assert result.kind == 'webcam'
+    assert [(control.id, control.label) for control in result.controls] == [('key:212', 'Camera')]

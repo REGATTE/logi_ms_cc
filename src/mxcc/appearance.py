@@ -72,6 +72,18 @@ QLabel#deviceConnection, QLabel#deviceSupport {{ font-size: 12px; color: {c['mut
 QLabel#homeEmpty {{ font-size: 15px; color: {c['muted']}; }}
 QFrame#card {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 10px; }}
 QFrame#actionInspector {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 18px; }}
+QFrame#deviceMappings, QFrame#deviceFacts {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 18px; }}
+QFrame#deviceControlRow {{ background: {c['alternate']}; border: 1px solid {c['border']}; border-radius: 12px; }}
+QFrame#deviceControlRow[selected="true"] {{ background: {c['selected']}; border: 1px solid {c['focus']}; }}
+QFrame#deviceControlRow[selected="true"] QLabel {{ color: {c['selected_text']}; }}
+QLabel#deviceSelection {{ color: {c['status']}; font-weight: 600; }}
+QFrame#deviceFacts QLabel, QFrame#deviceControlRow QLabel {{ background: transparent; }}
+QScrollArea#deviceControlsScroll, QScrollArea#deviceControlsScroll > QWidget > QWidget {{ background: {c['surface']}; border: none; }}
+QScrollArea#deviceControlsScroll QScrollBar:vertical {{ background: transparent; width: 8px; margin: 3px 0; }}
+QScrollArea#deviceControlsScroll QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 4px; min-height: 32px; }}
+QScrollArea#deviceControlsScroll QScrollBar::handle:vertical:hover {{ background: {c['muted']}; }}
+QScrollArea#deviceControlsScroll QScrollBar::add-line:vertical, QScrollArea#deviceControlsScroll QScrollBar::sub-line:vertical {{ height: 0; border: none; background: transparent; }}
+QScrollArea#deviceControlsScroll QScrollBar::add-page:vertical, QScrollArea#deviceControlsScroll QScrollBar::sub-page:vertical {{ background: transparent; }}
 QFrame#applicationCard, QFrame#applicationsEmpty {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 18px; }}
 QFrame#applicationCard QLabel, QFrame#applicationsEmpty QLabel {{ background: transparent; border: none; }}
 QLabel#applicationName {{ font-size: 15px; font-weight: 600; }}
@@ -110,6 +122,9 @@ QLineEdit#applicationSearch {{ border-radius: 12px; padding: 11px 14px; }}
 QComboBox#applicationProfile {{ border-radius: 10px; padding: 8px 28px 8px 11px; }}
 QComboBox#applicationProfile::drop-down {{ border: none; width: 24px; background: transparent; }}
 QComboBox#applicationProfile::down-arrow {{ image: none; }}
+QComboBox#deviceControlAssignment {{ border-radius: 10px; padding: 8px 28px 8px 11px; }}
+QComboBox#deviceControlAssignment::drop-down {{ border: none; width: 24px; background: transparent; }}
+QComboBox#deviceControlAssignment::down-arrow {{ image: none; }}
 QPushButton#applicationAction {{ border-radius: 10px; padding: 9px 12px; }}
 QAbstractItemView {{ background: {c['control']}; alternate-background-color: {c['alternate']}; border: 1px solid {c['border']}; selection-background-color: {c['selected']}; selection-color: {c['selected_text']}; }}
 QTableWidget {{ gridline-color: {c['border']}; }}

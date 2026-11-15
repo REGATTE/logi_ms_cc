@@ -540,8 +540,8 @@ class DeviceCard(_DeviceCardBase):
         self.art.set_kind(device.kind)
         self.name_label.setText(device.name)
         self._set_indicators([device])
-        self.support_label.setText("Customize" if device.supported else "Device details")
-        self.setAccessibleDescription("Open device settings" if device.supported else "Open connection and support details")
+        self.support_label.setText("Customize" if device.supported else "Controls" if device.controls else "Device details")
+        self.setAccessibleDescription("Open device settings" if device.supported else "Open controls and device details")
         self.update()
 
 

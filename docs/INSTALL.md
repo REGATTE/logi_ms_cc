@@ -2,7 +2,9 @@
 
 The initial package targets Ubuntu 24.04 with its system Python 3.12, on the
 architecture used to build it. It controls the USB MX Creative **Keypad**; other
-connected Logitech devices have a read-only details page. This is an independent
+connected Logitech devices have control-mapping placeholders and connection details.
+Those assignment dropdowns are intentionally empty and do not change input behavior.
+This is an independent
 community application, not Logitech's Logi Options+ software.
 
 ## Install a built package
@@ -45,12 +47,28 @@ picker. The Keys page has no profile dropdown or key-number heading; app icons
 above the keypad select shortcuts. Apply, Import, Edit, Use shortcuts on keypad,
 and Follow active app actions are grouped at the bottom of the inspector.
 
+Other Logitech devices receive a controls page automatically. The MX Dialpad
+shows its four buttons, one **Dial** mapping and one **Roller** mapping.
+G402 offers only the **Back** and **Forward** buttons. Other models
+use Ubuntu's reported button, key and wheel capabilities. Capability reporting
+does not always correspond one-to-one with physical buttons; hidden proprietary
+controls may need a model description. A device without reported controls shows
+an empty state. Reading this metadata requires no additional input permissions.
+
+On the G402 and dialpad pages, click an outlined control in the device image to
+highlight its matching assignment row; the list scrolls to the selected control.
+Clicking or focusing a row highlights the corresponding image control. Each
+wheel or dial is selected as one physical control with a single assignment.
+The future action will interpret direction (for example, increasing/decreasing
+volume or scrubbing forward/backward). Selection does not assign an action or alter device behavior.
+Devices without known physical layouts still support selection in the list.
+
 The home screen lists connected Logitech USB/HID and Bluetooth devices, grouping
 the keypad and dialpad under **MX Creative Console**. The shared bottom-left
 Refresh icon is available on every page and updates the inventory; it also refreshes while the window is
 open. Open the Console card to see its components side by side and select the
 keypad or dialpad by its image. The dialpad and other devices
-open connection details only.
+open control-mapping placeholders and connection details.
 Both selection pages show each device's reported battery percentage beside its
 connection dot beneath the device. No percentage appears when battery data is
 unavailable.

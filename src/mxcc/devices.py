@@ -14,6 +14,8 @@ import subprocess
 import time
 from typing import Mapping
 
+from .device_controls import DeviceControl, controls_for_device
+
 
 LOGITECH_VENDOR = 0x046D
 KEYPAD_PRODUCT = 0xC354
@@ -34,6 +36,8 @@ class Device:
     product_id: int
     battery_percent: int | None = None
     detail: str = ""
+    controls: tuple[DeviceControl, ...] = ()
+    controls_note: str = ""
 
 
 def _read(path: Path) -> str:
@@ -90,8 +94,35 @@ def _kind(name: str, product: int) -> str:
 def _device(identifier: str, name: str, product: int, connection: str,
             *, connected: bool | None = True, battery: int | None = None, detail: str = "") -> Device:
     name = _name(name, product)
-    return Device(identifier, name, _kind(name, product), connection, connected,
-                  product == KEYPAD_PRODUCT, LOGITECH_VENDOR, product, battery, detail)
+    device = Device(identifier, name, _kind(name, product), connection, connected,
+                    product == KEYPAD_PRODUCT, LOGITECH_VENDOR, product, battery, detail)
+    return _with_controls(device)
+
+
+def _with_controls(device: Device, input_paths=()) -> Device:
+    controls = controls_for_device(vendor_id=device.vendor_id, product_id=device.product_id,
+                                   kind=device.kind, input_paths=input_paths)
+    if any(control.source == "model" for control in controls):
+        note = "Controls from this device's documented layout."
+    elif controls:
+        note = "Controls reported by Ubuntu. Some devices report additional inputs or keep special buttons hidden."
+    else:
+        note = "Ubuntu has not reported buttons or wheels for this device."
+    return replace(device, controls=controls, controls_note=note)
+
+
+def _input_paths(path: Path) -> list[Path]:
+    return [entry for entry in _entries(path / "input") if re.fullmatch(r"input[0-9]+", entry.name)]
+
+
+def _usb_input_paths(path: Path) -> list[Path]:
+    inputs = _input_paths(path)
+    # Non-HID drivers (for example UVC snapshot buttons) attach input nodes
+    # directly to USB interfaces. Do not recurse into receiver child devices.
+    for interface in _entries(path):
+        if re.fullmatch(re.escape(path.name) + r":[0-9]+\.[0-9]+", interface.name):
+            inputs.extend(_input_paths(interface))
+    return inputs
 
 
 def _property(value):
@@ -204,11 +235,13 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
     """Return a deduplicated inventory; inject paths and BlueZ data in tests.
 
     ``connected=None`` means a receiver child is present but Linux has not
-    reported its wireless link state. Only the MX Creative Keypad is configurable
-    by this application. Multiple keypads remain separate inventory entries.
+    reported its wireless link state. Other devices expose metadata-only mapping
+    slots; only the MX Creative Keypad executes assignments. Multiple keypads
+    remain separate inventory entries.
     """
     devices: dict[str, Device] = {}
     usb_nodes: dict[Path, Device] = {}
+    inputs: dict[str, set[Path]] = {}
     for path in _entries(Path(usb_root)):
         vendor, product = _number(_read(path / "idVendor")), _number(_read(path / "idProduct"))
         if vendor != LOGITECH_VENDOR or product is None:
@@ -217,6 +250,7 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
         device = _device(f"usb:{vendor:04x}:{product:04x}:{identity}", _read(path / "product"), product, "USB")
         devices[device.id] = device
         usb_nodes[path.resolve()] = device
+        inputs[device.id] = set(_usb_input_paths(path))
 
     objects = _read_bluez() if bluez_objects is None else bluez_objects
     bluetooth, connected_bluetooth = _bluez_devices(objects or {})
@@ -238,9 +272,11 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
             # Composite Bluetooth devices expose several HID interfaces with
             # one address. Keep the richer BlueZ record for every interface.
             devices.setdefault(identifier, bluetooth.get(unique) or _device(identifier, name, product, "Bluetooth"))
+            inputs.setdefault(identifier, set()).update(_input_paths(path))
             continue
         parent = next((usb_nodes[ancestor] for ancestor in path.resolve().parents if ancestor in usb_nodes), None)
         if parent is not None and parent.kind != "receiver":
+            inputs.setdefault(parent.id, set()).update(_input_paths(path))
             continue  # Composite USB HID interfaces belong to one physical card.
         if parent is not None and (product == parent.product_id or "receiver" in name.casefold()):
             continue
@@ -251,6 +287,7 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
         devices[identifier] = _device(identifier, name, product, link,
                                      connected=None if parent is not None else True,
                                      detail="Wireless connection state is not reported by the receiver." if parent is not None else "")
+        inputs.setdefault(identifier, set()).update(_input_paths(path))
     devices.update({device.id: device for device in bluetooth.values()})
     # USB battery reporting, where available, is attached to physical devices.
     for path, device in usb_nodes.items():
@@ -259,4 +296,5 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
             if capacity.isdigit() and 0 <= int(capacity) <= 100:
                 devices[device.id] = replace(device, battery_percent=int(capacity))
                 break
-    return sorted(devices.values(), key=lambda device: (device.kind != "keypad", device.name.casefold(), device.id))
+    return sorted((_with_controls(device, sorted(inputs.get(device.id, ()))) for device in devices.values()),
+                  key=lambda device: (device.kind != "keypad", device.name.casefold(), device.id))
