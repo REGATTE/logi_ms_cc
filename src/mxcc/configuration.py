@@ -24,6 +24,18 @@ _PREFERRED_APPS = [
 ]
 
 
+def compact_launchers(launchers: list[str | None], apps: Iterable[Application]) -> list[str | None]:
+    """Pack validated slots while retaining unavailable app IDs for portability.
+
+    Available apps and Screenshot keep their relative order at the front.
+    Unavailable apps follow them, then empty slots; the input is not mutated.
+    """
+    available = {app.id for app in apps} | {"@screenshot"}
+    active = [value for value in launchers if value in available]
+    missing = [value for value in launchers if value is not None and value not in available]
+    return active + missing + [None] * launchers.count(None)
+
+
 def default_settings(apps: Iterable[Application]) -> dict:
     apps = list(apps)
     indexed = {app.id: app for app in apps}
@@ -35,7 +47,7 @@ def default_settings(apps: Iterable[Application]) -> dict:
         launchers.append(chosen)
     return {
         "version": 1,
-        "launchers": launchers + ["@screenshot", None, None, None],
+        "launchers": compact_launchers(launchers + ["@screenshot", None, None, None], apps),
         "profile_assignments": {},
         "auto_switch": True,
         "start_at_login": False,
@@ -83,7 +95,11 @@ def load_settings(apps: Iterable[Application] | None = None) -> dict:
             contents = stream.read(256 * 1024 + 1)
         if len(contents) > 256 * 1024:
             raise ConfigurationError("Settings file exceeds 256 KiB")
-        return validate_settings(json.loads(contents.decode("utf-8")))
+        settings = validate_settings(json.loads(contents.decode("utf-8")))
+        settings["launchers"] = compact_launchers(
+            settings["launchers"], discover_applications() if apps is None else apps,
+        )
+        return settings
     except FileNotFoundError:
         return default_settings(discover_applications() if apps is None else apps)
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
@@ -137,7 +153,7 @@ def compile_runtime(settings: dict, apps: Iterable[Application], profiles: dict[
         return {"name": name, "keys": keys}
 
     launcher_keys: list[dict | None] = []
-    for app_id in settings["launchers"]:
+    for app_id in compact_launchers(settings["launchers"], apps):
         if app_id == "@screenshot":
             launcher_keys.append({"label": "Screenshot", "action": {"type": "screenshot"}, "image": face("Screenshot", "applets-screenshooter")})
         elif app_id in indexed:

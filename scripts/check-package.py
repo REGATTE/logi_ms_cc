@@ -18,6 +18,7 @@ required = {
     "./usr/lib/mx-creative-control/setup-permissions",
     "./usr/lib/mx-creative-control/python/mxcc/__main__.py",
     "./usr/lib/mx-creative-control/python/mxcc/appearance.py",
+    "./usr/lib/mx-creative-control/python/mxcc/key_button.py",
     "./usr/lib/udev/rules.d/70-mx-creative-control.rules",
     "./usr/lib/systemd/user/mx-creative-control.service",
     "./usr/share/polkit-1/actions/org.mxcreativecontrol.setup-permissions.policy",
@@ -58,15 +59,18 @@ with tempfile.TemporaryDirectory(prefix="mxcc-package-check-") as directory:
     smoke = """
 import json
 import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from PySide6.QtCore import Qt, qVersion
-from PySide6.QtGui import QIcon, QImage, QPalette
+from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, qVersion
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QImage, QPalette
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QWidget
 import mxcc
 from mxcc.gui import MainWindow
 from mxcc.configuration import default_settings
+from mxcc.applications import Application
+from mxcc.key_button import LAUNCHER_MIME
 from mxcc.paths import runtime_path, settings_path
 app = QApplication([])
 widget = QWidget()
@@ -80,20 +84,31 @@ image = QImage(72, 72, QImage.Format.Format_RGB32)
 image.fill(0)
 assert image.save(sys.argv[2], 'JPEG')
 # Existing version-1 settings must acquire the system theme without losing keys.
-legacy = default_settings([])
+applications = [Application(f'{name}.desktop', name.title(), sys.argv[3], name,
+                            name, Path(f'/unused/{name}.desktop'))
+                for name in ('alpha', 'beta', 'gamma')]
+legacy = default_settings(applications)
+legacy['launchers'] = [None, 'alpha.desktop', 'missing.desktop', None,
+                       'beta.desktop', 'gamma.desktop', None, '@screenshot', None]
 legacy.pop('theme', None)
 settings_path().parent.mkdir(parents=True, exist_ok=True)
 settings_path().write_text(json.dumps(legacy))
-window = MainWindow(connect_worker=False, applications=[])
+window = MainWindow(connect_worker=False, applications=applications)
 window.show()
 app.processEvents()
 assert not window.windowIcon().pixmap(64, 64).isNull()
 assert json.loads(settings_path().read_text())['theme'] == 'system'
-assert window.settings['launchers'] == legacy['launchers']
+assert window.settings['launchers'] == ['alpha.desktop', 'beta.desktop', 'gamma.desktop',
+                                        '@screenshot', 'missing.desktop', None, None, None, None]
 compiled = json.loads(runtime_path().read_text())
 assert len(compiled['pages']) == 2
 assert all(len(page['keys']) == 9 for page in compiled['pages'])
 assert not window.timer.isActive()
+def displayed_launchers():
+    keys = json.loads(runtime_path().read_text())['pages'][0]['keys']
+    return [key['action'].get('desktop_id', '@screenshot') if key else None for key in keys]
+assert displayed_launchers() == ['alpha.desktop', 'beta.desktop', 'gamma.desktop',
+                                 '@screenshot', None, None, None, None, None]
 original_runtime = runtime_path().read_bytes()
 for mode in ('light', 'dark', 'system'):
     index = window.theme_combo.findData(mode)
@@ -111,9 +126,48 @@ for scheme, expected in ((Qt.ColorScheme.Dark, 'dark'), (Qt.ColorScheme.Light, '
     app.processEvents()
     assert window.appearance.effective_theme == expected
 assert runtime_path().read_bytes() == original_runtime
+
+def drop_launcher(source_slot, target_slot):
+    source, target = window.key_buttons[source_slot], window.key_buttons[target_slot]
+    mime = QMimeData()
+    mime.setData(LAUNCHER_MIME, str(source_slot).encode('ascii'))
+    class Enter(QDragEnterEvent):
+        def source(self):
+            return source
+    class Drop(QDropEvent):
+        def source(self):
+            return source
+    enter = Enter(QPoint(20, 20), Qt.DropAction.MoveAction, mime,
+                  Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(target, enter)
+    assert enter.isAccepted()
+    drop = Drop(QPointF(20, 20), Qt.DropAction.MoveAction, mime,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(target, drop)
+    assert drop.isAccepted()
+    app.processEvents()
+
+# Actual packaged native-drop handlers must save and compile insertion order.
+shortcuts_before = json.loads(runtime_path().read_text())['pages'][1]
+drop_launcher(0, 2)
+assert displayed_launchers() == ['beta.desktop', 'gamma.desktop', 'alpha.desktop',
+                                 '@screenshot', None, None, None, None, None]
+drop_launcher(1, 8)
+expected = ['beta.desktop', 'alpha.desktop', '@screenshot', 'gamma.desktop']
+assert displayed_launchers() == expected + [None] * 5
+saved = json.loads(settings_path().read_text())
+assert saved['launchers'] == expected + ['missing.desktop'] + [None] * 4
+assert json.loads(runtime_path().read_text())['pages'][1] == shortcuts_before
 window.close()
 app.processEvents()
-print('Bundled settings, theme migration/modes, canonical icon, runtime and Qt image smoke: OK')
+window = MainWindow(connect_worker=False, applications=applications)
+window.show()
+app.processEvents()
+assert window.settings['launchers'] == saved['launchers']
+assert displayed_launchers() == expected + [None] * 5
+window.close()
+app.processEvents()
+print('Bundled settings, packed Apps/native reorder persistence, themes, icon and runtime smoke: OK')
 """
     icon = root / "usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg"
     subprocess.run(["/usr/bin/python3", "-I", "-c", smoke, str(private), str(root / "face.jpg"), str(icon)],

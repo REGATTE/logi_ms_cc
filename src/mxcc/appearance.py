@@ -79,9 +79,10 @@ QAbstractItemView {{ background: {c['control']}; alternate-background-color: {c[
 QTableWidget {{ gridline-color: {c['border']}; }}
 QHeaderView::section {{ background: {c['sidebar']}; border: none; padding: 9px; font-weight: 600; }}
 QTableCornerButton::section {{ background: {c['sidebar']}; border: none; }}
-QToolButton#key {{ background: #202126; color: white; border: 2px solid #49484d; border-radius: 10px; }}
+QToolButton#key {{ background: #000000; color: white; border: 2px solid #49484d; border-radius: 10px; }}
 QToolButton#key:checked {{ border: 3px solid #ba94ef; }}
 QToolButton#key:hover {{ border-color: #c9b6e8; }}
+QToolButton#key[dropTarget="true"] {{ border: 3px solid #71e4bc; }}
 QCheckBox {{ spacing: 10px; padding: 5px 0; }}
 QCheckBox:disabled {{ color: {c['disabled_text']}; }}
 QMenu {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c['border']}; }}

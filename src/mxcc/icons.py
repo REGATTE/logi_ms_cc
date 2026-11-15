@@ -62,6 +62,28 @@ def display_icon(name: str, *, application: bool = False) -> QIcon:
     return QApplication.style().standardIcon(standard)
 
 
+def _trim_transparent_padding(image: QImage) -> QImage:
+    """Remove only fully transparent outer pixels, including in padded PNGs."""
+    if not image.hasAlphaChannel():
+        return image
+    rgba = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    pixels = rgba.constBits()
+    width, height = rgba.width(), rgba.height()
+    left, top, right, bottom = width, height, 0, 0
+    for y in range(height):
+        offset = y * rgba.bytesPerLine()
+        alpha = bytes(pixels[offset + 3:offset + width * 4:4])
+        end = len(alpha.rstrip(b"\0"))
+        if end:
+            left = min(left, width - len(alpha.lstrip(b"\0")))
+            right = max(right, end)
+            top = min(top, y)
+            bottom = y + 1
+    if right == 0:
+        return QImage()
+    return image.copy(left, top, right - left, bottom - top)
+
+
 class FaceRenderer:
     """Runs in the settings process only; the worker reads already encoded JPEGs."""
 
@@ -70,7 +92,7 @@ class FaceRenderer:
 
     def __call__(self, label: str, icon_name: str, application=None) -> str:
         image = QImage(118, 118, QImage.Format.Format_RGB32)
-        image.fill(QColor("#202126"))
+        image.fill(Qt.GlobalColor.black)
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -81,16 +103,17 @@ class FaceRenderer:
             # when an installed app or imported action has no available artwork.
             icon = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
         if not icon.isNull():
-            # A neutral inset keeps both light and dark original artwork legible.
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#f4f4f6"))
-            painter.drawRoundedRect(QRect(22, 10 if self.show_labels else 23, 74, 74), 12, 12)
-            pixmap = icon.pixmap(QSize(64, 64))
-            pixmap = pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio,
-                                   Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap((118 - pixmap.width()) // 2,
-                               (15 if self.show_labels else 28) + (64 - pixmap.height()) // 2,
-                               pixmap)
+            # Resolve a larger source before fitting the original artwork. Only
+            # transparent padding is trimmed; no backing tile or crop is added.
+            artwork = _trim_transparent_padding(icon.pixmap(QSize(216, 216)).toImage())
+            if not artwork.isNull():
+                area = QRect(5, 5, 108, 76 if self.show_labels else 108)
+                artwork = artwork.scaled(area.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+                artwork.setDevicePixelRatio(1)
+                painter.drawImage(area.x() + (area.width() - artwork.width()) // 2,
+                                  area.y() + (area.height() - artwork.height()) // 2,
+                                  artwork)
         if self.show_labels:
             painter.setPen(QColor("#f7f7fa"))
             font = QFont("Sans Serif")

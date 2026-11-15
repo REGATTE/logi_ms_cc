@@ -47,8 +47,18 @@ Image names are simple filenames relative to the keys cache; no paths/traversal.
 Pages have exactly nine optional keys. Supported action types: `launch`
 (desktop entry ID, launched without a shell using `gtk-launch`), `shortcut`
 (key combination), `screenshot` (Print), `none`. Empty tiles do nothing.
-The Apps page remains static; page 1 follows the focused app when auto_switch
+The Apps page does not change with window focus; page 1 follows the focused app when auto_switch
 is enabled. The keypad's two physical navigation buttons switch the two pages.
+
+The Apps page packs available desktop apps and Screenshot left-to-right,
+top-to-bottom with trailing empty keys only. Launcher normalization preserves
+available entries in relative order, then missing desktop IDs in relative
+order, then nulls; missing apps remain saved but do not create visible gaps.
+Shortcut pages retain their explicit slot positions and are never compacted.
+Native Apps-key dragging inserts the source at the destination, shifting other
+visible entries rather than swapping them; dropping onto a blank key appends.
+Each accepted reorder saves settings, compiles the new runtime, and reloads
+the worker immediately. Shortcut-page keys cannot be reordered by this gesture.
 
 ## IPC
 
@@ -79,6 +89,8 @@ dict (atomic copy into user profile directory, reject malformed input).
 `mxcc.configuration`: `load_settings()` -> dict,
 `save_settings(settings)` atomic, `default_settings(apps)` -> dict,
 `compile_runtime(settings, apps, profiles, render_face)` -> runtime dict.
+`compact_launchers(launchers, apps)` -> nine entries with available launchers,
+then retained missing IDs, then nulls; it does not modify the input list.
 `render_face(label, icon_name, app_or_none)` callback returns JPEG filename;
 frontend provides Qt icon rendering, compiler does not import Qt.
 Settings: `version:1`, `launchers` nine entries (desktop ID, `"@screenshot"`,

@@ -71,10 +71,11 @@ def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app
     window.app_combo.setCurrentIndex(window.app_combo.findData(installed_app.id))
     QTest.mouseClick(window.apply_button, Qt.MouseButton.LeftButton)
     assert not warnings
-    assert window.key_buttons[6].toolTip() == "Editor"
+    assert window.key_buttons[1].toolTip() == "Editor"
+    assert window.selected_slot == 1
     settings = json.loads(paths.settings_path().read_text())
-    assert settings["launchers"][6] == "editor.desktop"
-    key = json.loads(paths.runtime_path().read_text())["pages"][0]["keys"][6]
+    assert settings["launchers"] == ["@screenshot", "editor.desktop"] + [None] * 7
+    key = json.loads(paths.runtime_path().read_text())["pages"][0]["keys"][1]
     assert key["action"] == {"type": "launch", "desktop_id": "editor.desktop"}
     image_path = paths.cache_dir() / key["image"]
     assert image_path.read_bytes().startswith(b"\xff\xd8")
@@ -189,8 +190,8 @@ def test_window_export_import_restores_layout_but_keeps_local_startup_preference
     source.write_text(json.dumps(bundle))
     window.import_configuration()
     assert not warnings
-    assert window.settings["launchers"][8] == installed_app.id
-    assert window.runtime["pages"][0]["keys"][8]["label"] == "Editor"
+    assert window.settings["launchers"] == ["@screenshot", installed_app.id] + [None] * 7
+    assert window.runtime["pages"][0]["keys"][1]["label"] == "Editor"
     assert not window.auto_switch.isChecked()
     assert not window.show_labels.isChecked()
     assert not window.start_at_login.isChecked()
@@ -306,3 +307,99 @@ def test_worker_startup_failure_surfaces_error_without_claiming_connected(isolat
     window.start_worker()
     assert window.connection.text() == "Keypad connected"
     assert window.notice.text() == ""
+
+
+def launcher_window(installed_app):
+    apps = [replace(installed_app, id=f'{name}.desktop', name=name.title())
+            for name in ('chatgpt', 'code', 'firefox')]
+    return gui.MainWindow(connect_worker=False, applications=apps), apps
+
+
+def test_drag_reorders_preview_runtime_and_saved_settings(isolated_qt, installed_app, monkeypatch):
+    _, warnings = isolated_qt
+    window, apps = launcher_window(installed_app)
+    before = json.loads(paths.runtime_path().read_text())
+    images = {entry['label']: entry['image'] for entry in before['pages'][0]['keys'] if entry}
+    request = Mock(return_value={'ok': True})
+    monkeypatch.setattr(gui.ipc, 'request', request)
+    window.connect_worker = True
+    window.key_buttons[0].moved.emit(0, 2)
+    expected = ['code.desktop', 'firefox.desktop', 'chatgpt.desktop', '@screenshot'] + [None] * 5
+    assert window.settings['launchers'] == expected
+    assert json.loads(paths.settings_path().read_text())['launchers'] == expected
+    assert [key.toolTip() for key in window.key_buttons[:4]] == ['Code', 'Firefox', 'Chatgpt', 'Screenshot']
+    assert window.selected_slot == 2
+    assert window.app_combo.currentData() == 'chatgpt.desktop'
+    after = json.loads(paths.runtime_path().read_text())
+    assert after['pages'][0]['keys'][2]['action']['desktop_id'] == 'chatgpt.desktop'
+    assert {entry['label']: entry['image'] for entry in after['pages'][0]['keys'] if entry} == images
+    assert after['pages'][1] == before['pages'][1]
+    assert after['profiles'] == before['profiles']
+    request.assert_called_once_with('reload')
+    reopened = gui.MainWindow(connect_worker=False, applications=apps)
+    assert reopened.settings['launchers'] == expected
+    assert not warnings
+
+
+def test_drag_backward_and_to_empty_key_keep_apps_together(isolated_qt, installed_app):
+    window, _ = launcher_window(installed_app)
+    window.move_launcher(2, 0)
+    assert window.settings['launchers'][:4] == ['firefox.desktop', 'chatgpt.desktop', 'code.desktop', '@screenshot']
+    window.move_launcher(0, 8)
+    assert window.settings['launchers'] == ['chatgpt.desktop', 'code.desktop', '@screenshot', 'firefox.desktop'] + [None] * 5
+    assert window.selected_slot == 3
+    assert all(key is None for key in window.runtime['pages'][0]['keys'][4:])
+
+
+def test_clearing_app_and_rescanning_close_gaps(isolated_qt, installed_app, monkeypatch):
+    window, apps = launcher_window(installed_app)
+    window.select_key(1)
+    window.app_combo.setCurrentIndex(window.app_combo.findData(None))
+    window.apply_key()
+    assert window.settings['launchers'] == ['chatgpt.desktop', 'firefox.desktop', '@screenshot'] + [None] * 6
+    monkeypatch.setattr(gui, 'discover_applications', lambda: apps[1:])
+    window.rescan()
+    assert window.settings['launchers'] == ['firefox.desktop', '@screenshot', 'chatgpt.desktop'] + [None] * 6
+    keys = window.runtime['pages'][0]['keys']
+    assert [entry['label'] for entry in keys if entry] == ['Firefox', 'Screenshot']
+    assert all(entry is None for entry in keys[2:])
+    monkeypatch.setattr(gui, 'discover_applications', lambda: apps)
+    window.rescan()
+    assert [entry['label'] for entry in window.runtime['pages'][0]['keys'] if entry] == ['Firefox', 'Screenshot', 'Chatgpt']
+
+
+def test_empty_invalid_and_shortcut_drags_do_not_save(isolated_qt, installed_app, monkeypatch):
+    window, _ = launcher_window(installed_app)
+    save = Mock(wraps=gui.save_settings)
+    monkeypatch.setattr(gui, 'save_settings', save)
+    for source, destination in ((8, 0), (0, 0), (-1, 0), (0, 9), (True, 0), ('0', 1)):
+        window.move_launcher(source, destination)
+    window.change_page(1)
+    window.move_launcher(0, 2)
+    assert all(not key.acceptDrops() for key in window.key_buttons)
+    save.assert_not_called()
+
+
+@pytest.mark.parametrize('failed_write', ['save_settings', 'atomic_json'])
+def test_failed_reorder_keeps_previous_order(isolated_qt, installed_app, monkeypatch, failed_write):
+    _, warnings = isolated_qt
+    window, _ = launcher_window(installed_app)
+    before = paths.settings_path().read_bytes(), paths.runtime_path().read_bytes()
+    original = window.settings['launchers'][:]
+    monkeypatch.setattr(gui, failed_write, Mock(side_effect=OSError('Disk unavailable')))
+    window.move_launcher(0, 2)
+    assert window.settings['launchers'] == original
+    assert window.selected_slot == 0
+    assert before == (paths.settings_path().read_bytes(), paths.runtime_path().read_bytes())
+    assert warnings == [('Could not save order', 'Disk unavailable')]
+
+
+def test_worker_rejection_preserves_saved_order_and_reports_sync_error(isolated_qt, installed_app, monkeypatch):
+    window, _ = launcher_window(installed_app)
+    window.connect_worker = True
+    monkeypatch.setattr(gui.ipc, 'request', Mock(return_value={'ok': False, 'error': 'Layout rejected'}))
+    window.move_launcher(0, 2)
+    assert window.selected_slot == 2
+    assert json.loads(paths.settings_path().read_text())['launchers'] == window.settings['launchers']
+    assert window.worker_sync_error == 'Layout rejected'
+    assert 'saved, but not applied' in window.notice.text()

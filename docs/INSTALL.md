@@ -10,7 +10,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.1.2_amd64.deb
+sudo apt install ./mx-creative-control_0.1.3_amd64.deb
 mx-creative-control
 ```
 
@@ -22,9 +22,17 @@ An arm64 machine requires an arm64 build.
 Connect the keypad over USB. Open **MX Creative Control** from Ubuntu's app
 launcher, select a tile under **Customize**, choose an installed app, then press
 **Apply to key**. App images come from their original desktop icons.
+Artwork fills each key with a narrow black border and no added white tile.
 Re-scan after installing an additional
 app; the app must provide a desktop entry to appear in the list. A ChatGPT browser
 shortcut or PWA appears if the browser creates a desktop entry for it.
+
+The Apps page packs available apps and Screenshot left-to-right, top-to-bottom,
+with empty keys only at the end. Missing configured apps remain in settings for
+use on another PC; they do not leave gaps between visible keys. Drag an Apps key
+onto another to insert it there and shift the remaining apps. Dropping onto an
+empty key appends it. Reordering saves the layout and reloads the keypad
+immediately. Shortcut profiles keep their explicit slot positions.
 
 The Rust worker stays in the background and owns the tray icon. Opening settings
 starts the Qt process; closing settings releases that process. Ubuntu's default
@@ -117,7 +125,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.2_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.3_amd64.deb
 python3 scripts/source-archive.py
 ```
 

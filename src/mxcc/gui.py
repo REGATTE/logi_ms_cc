@@ -10,14 +10,15 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import __version__, ipc, service
 from .applications import discover_applications
 from .appearance import AppearanceController
-from .configuration import compile_runtime, load_settings, profile_for_app, save_settings
+from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
 from .icons import FaceRenderer, display_icon, setup_icon_theme
+from .key_button import KeyButton
 from .paths import cache_dir, profiles_dir, runtime_path
 from .profile_editor import ProfileEditor
 from .profiles import ProfileExistsError, atomic_json, import_profile, load_profiles
@@ -132,13 +133,14 @@ class MainWindow(QMainWindow):
         grid.setSpacing(8)
         self.key_buttons = []
         for index in range(9):
-            key = QToolButton()
+            key = KeyButton(index, self.device)
             key.setObjectName("key")
             key.setFixedSize(110, 110)
             key.setIconSize(QSize(100, 100))
             key.setCheckable(True)
             key.setAccessibleName(f"Key {index + 1}")
             key.clicked.connect(lambda checked=False, slot=index: self.select_key(slot))
+            key.moved.connect(self.move_launcher)
             grid.addWidget(key, index // 3, index % 3)
             self.key_buttons.append(key)
         device_column.addWidget(self.device, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -152,6 +154,8 @@ class MainWindow(QMainWindow):
             pages.addWidget(control)
         pages.addStretch()
         device_column.addLayout(pages)
+        self.reorder_hint = label("Drag app icons to reorder. Changes save automatically.", "muted", True)
+        device_column.addWidget(self.reorder_hint)
         device_column.addWidget(label("Use the keypad’s arrow buttons to change pages.", "muted", True))
         device_column.addStretch()
         body.addLayout(device_column)
@@ -405,14 +409,25 @@ class MainWindow(QMainWindow):
             key.setIcon(QIcon(str(cache_dir() / entry["image"])) if entry else QIcon())
             key.setText("" if entry else "+")
             key.setToolTip(entry["label"] if entry else "Empty key")
+            key.set_reorder_enabled(self.page == 0)
+            key.set_draggable(self.page == 0 and entry is not None)
+        self.reorder_hint.setVisible(self.page == 0)
         for index, control in enumerate(self.page_buttons):
             control.setChecked(index == self.page)
 
-    def persist(self, *, notify=True):
-        compiled = compile_runtime(self.settings, self.apps, self.profiles,
-                                   FaceRenderer(self.settings["show_labels"]))
-        save_settings(self.settings)
-        atomic_json(runtime_path(), compiled)
+    def persist(self, *, notify=True, settings=None):
+        candidate = self.settings if settings is None else settings
+        candidate = {**candidate, "launchers": compact_launchers(candidate["launchers"], self.apps)}
+        compiled = compile_runtime(candidate, self.apps, self.profiles,
+                                   FaceRenderer(candidate["show_labels"]))
+        save_settings(candidate)
+        try:
+            atomic_json(runtime_path(), compiled)
+        except OSError:
+            # A failed runtime write must not leave a drag saved only on disk.
+            save_settings(self.settings)
+            raise
+        self.settings = candidate
         self.runtime = compiled
         if notify and self.connect_worker:
             try:
@@ -424,21 +439,55 @@ class MainWindow(QMainWindow):
                 self.notice.setText("Layout saved.")
             except ipc.WorkerUnavailable:
                 self.notice.setText("Saved. Start the worker to apply this layout.")
+            except RuntimeError as exc:
+                self.worker_sync_error = str(exc)
+                self.notice.setText(f"Layout saved, but not applied: {exc}")
         self.refresh_keys()
 
     def apply_key(self):
-        self.settings["launchers"][self.selected_slot] = self.app_combo.currentData()
+        launchers = list(self.settings["launchers"])
+        launchers[self.selected_slot] = self.app_combo.currentData()
+        candidate = {**self.settings, "launchers": launchers,
+                     "profile_assignments": dict(self.settings["profile_assignments"])}
         app = self.selected_app()
         if app:
-            self._set_assignment(app.id, self.profile_combo.currentData())
-        self.safe_save()
+            self._set_assignment(app.id, self.profile_combo.currentData(), settings=candidate)
+        available = {app.id for app in self.apps} | {"@screenshot"}
+        selected = sum(app_id in available for app_id in launchers[:self.selected_slot])
+        try:
+            self.persist(settings=candidate)
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Could not save configuration", str(exc))
+            return
+        self.select_key(selected)
         self._populate_apps()
 
-    def _set_assignment(self, app_id, profile_id):
+    def move_launcher(self, source, destination):
+        """Insert the dragged app at a key; dropping past the last app appends."""
+        if self.page != 0 or any(type(slot) is not int or not 0 <= slot < 9
+                                 for slot in (source, destination)):
+            return
+        count = sum(key is not None for key in self.runtime["pages"][0]["keys"])
+        if source >= count:
+            return
+        destination = min(destination, count - 1)
+        if source == destination:
+            return
+        launchers = list(self.settings["launchers"])
+        launchers.insert(destination, launchers.pop(source))
+        try:
+            self.persist(settings={**self.settings, "launchers": launchers})
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Could not save order", str(exc))
+            return
+        self.select_key(destination)
+
+    def _set_assignment(self, app_id, profile_id, *, settings=None):
+        settings = self.settings if settings is None else settings
         if profile_id == "__auto__":
-            self.settings["profile_assignments"].pop(app_id, None)
+            settings["profile_assignments"].pop(app_id, None)
         else:
-            self.settings["profile_assignments"][app_id] = profile_id
+            settings["profile_assignments"][app_id] = profile_id
 
     def assign_profile(self, app_id, profile_id):
         self._set_assignment(app_id, profile_id)
@@ -550,7 +599,7 @@ class MainWindow(QMainWindow):
             return
         try:
             settings, profiles = read_bundle(Path(filename))
-            if QMessageBox.question(self, "Replace configuration?", "Replace your launcher layout and the profiles included in this export? Apps not installed here will have empty keys.") != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, "Replace configuration?", "Replace your launcher layout and the profiles included in this export? Available apps will fill the keys in order; unavailable apps stay saved for other computers.") != QMessageBox.StandardButton.Yes:
                 return
             # Startup is a machine preference, not silently changed by an imported file.
             settings["start_at_login"] = self.settings["start_at_login"]

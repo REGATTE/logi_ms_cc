@@ -4,10 +4,11 @@ Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046
 
 ## Automated checks
 
-- 91 Python tests: discovery precedence and desktop IDs, profile validation and atomic imports, settings compilation, original-icon and icons-only fallback rendering, real Qt editor/import/export interactions, portable configuration, private runtime directories, permission-dialog cancellation/authorization routing, window activation recovery, user-service startup, appearance persistence and live system-theme changes.
+- 121 Python tests: discovery precedence and desktop IDs, profile validation and atomic imports, settings compilation, original-icon and icons-only fallback rendering, real Qt editor/import/export interactions, portable configuration, private runtime directories, permission-dialog cancellation/authorization routing, window activation recovery, user-service startup, appearance persistence, live system-theme changes, packed launcher order and native key dragging.
+- Five final-JPEG pixel tests verify the 118-pixel black canvas, narrow five-pixel inset, proportional artwork fit, transparent-padding trimming and optional labels. White pixels and opaque backgrounds belonging to original icons are preserved; the renderer adds no white tile.
 - 14 Rust tests cover HID packet framing and captured acknowledgments, key press edges, shortcut parsing, config validation, page/profile state, private bounded Unix IPC and simulated queue-full recovery.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
-- Package inspection verifies root-owned files, safe modes, the fixed permission helper and policy, original bundled Qt runtime, an actual offscreen settings window and Python-to-Rust runtime validation.
+- Package inspection verifies root-owned files, safe modes, the fixed permission helper and policy, original bundled Qt runtime, an actual offscreen settings window, packed launchers, native-drop persistence, and Python-to-Rust runtime validation.
 
 Tests run without opening hardware. The package smoke extracts into a temporary directory without installing system files.
 
@@ -25,6 +26,8 @@ Tests run without opening hardware. The package smoke extracts into a temporary 
 - Recovery was verified with a real stopped worker: reopening the existing settings window started a new managed worker, reapplied the launcher layout and restored Apps page 0 without a display error. The source worker is active in its own user-session unit, separate from the settings process.
 - Version 0.1.2 adds two focused Rust tests for source/installed icon resolution and missing-artwork fallback. The live GNOME panel was visually checked: the mint keypad icon is visible, using the same SVG as the application window. D-Bus exposes the resolved absolute icon path.
 - The workstation prefers dark appearance; native Qt reports Dark, legacy configuration defaults to System, and the live window opens dark. Light/Dark overrides, system-change signals, dialog/popup palettes, import and persistence are tested. Changing appearance leaves the keypad runtime file unchanged.
+- Version 0.1.3 was exercised with a real native mouse drag from key index 0 to 2 in an isolated settings window on X11. The insertion order was persisted, the screenshot was visually checked, and the shortcut page remained unchanged. This check used isolated configuration without changing the live keypad layout.
+- The live 0.1.3 window and runtime were checked with five consecutive Apps keys: ChatGPT, Lark, Firefox, Warp and Screenshot. The worker reported keypad/input/panel access ready, Apps page 0 and no error. The final screenshot shows enlarged original artwork on black, with the selection outline still visible.
 
 The GUI and worker run without root. Permission repair uses the packaged fixed helper through Ubuntu's polkit authentication. The privileged repair operation has been reviewed and its argument rejection tested; a package install/administrator dialog is not required for source testing when device access already exists.
 
