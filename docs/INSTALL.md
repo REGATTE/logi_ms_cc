@@ -12,7 +12,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.2.0_amd64.deb
+sudo apt install ./mx-creative-control_0.3.0_amd64.deb
 mx-creative-control
 ```
 
@@ -68,11 +68,13 @@ the keypad and dialpad under **MX Creative Console**. The shared bottom-left
 Refresh icon is available on every page and updates the inventory; it also refreshes while the window is
 open. Open the Console card to see its components side by side and select the
 keypad or dialpad by its image. The dialpad and other devices
-open control-mapping placeholders and connection details.
+open control assignments and connection details. Supported buttons can open the
+Action Ring; wheels and other actions retain empty choices.
 Both selection pages show each device's reported battery percentage beside its
 connection dot beneath the device. No percentage appears when battery data is
 unavailable.
-No Bluetooth pairing or configuration of other devices is performed.
+Discovery does not pair Bluetooth devices. Only explicit button assignments
+enable ring capture; the dialpad uses temporary per-button diversion.
 Connect just one supported keypad to use the editor; multiple keypads are
 shown individually, but their configuration cannot be targeted independently.
 Back controls return to the console or all devices. The Settings gear at the bottom left of every page opens
@@ -126,9 +128,11 @@ screen images or respond to the same button presses.
 
 ## Device permissions
 
-The package supplies an active-seat udev rule for Logitech USB ID `046d:c354`
-and `/dev/uinput`. The first grants access to the keypad; the second allows the
-worker to emit configured keys. It does not grant access to reading other
+The package supplies active-seat udev rules for the USB keypad `046d:c354`,
+Bluetooth dialpad `046d:bc00`, and `/dev/uinput`. These allow keypad output,
+temporary diversion of assigned dialpad buttons, and configured shortcut input.
+G402 ring triggers use per-device X11 button grabs without extra device permissions.
+The rules do not grant access to reading other
 keyboards, change user groups, or make device files writable by everyone.
 
 Open the footer's Settings gear and find **Permissions & connection** for access
@@ -162,7 +166,7 @@ is an active local desktop session. Access is intentionally tied to the active
 seat. Rules placed by an administrator in `/etc/udev/rules.d/` may override the
 packaged rule and are not overwritten by the helper.
 
-Existing-window activation and automatic shortcut-page switching support X11.
+Existing-window activation, automatic shortcut-page switching and Action Ring support X11.
 Wayland keeps launching apps and manually selected shortcut pages working, but
 this implementation cannot focus existing Wayland windows or detect their
 global focus changes. The settings status
@@ -189,7 +193,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.2.0_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.3.0_amd64.deb
 python3 scripts/source-archive.py
 ```
 

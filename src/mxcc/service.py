@@ -13,7 +13,7 @@ from .paths import cache_dir, config_dir, runtime_path, socket_path
 SERVICE = "mx-creative-control.service"
 DEV_SERVICE = "mx-creative-control-dev.service"
 USER_UNIT = Path("/usr/lib/systemd/user") / SERVICE
-REQUIRED_CAPABILITY = "launcher_activation_v1"
+REQUIRED_CAPABILITY = "actions_ring_v2"
 # Only session/display locations needed by the worker and its settings launcher
 # cross into the transient service. Never copy the caller's entire environment.
 SESSION_ENVIRONMENT = (
@@ -50,7 +50,7 @@ def gui_command() -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     import shlex
     content = ("#!/bin/sh\n" + "PYTHONPATH=" + shlex.quote(str(source)) + " exec "
-               + shlex.quote(sys.executable) + " -m mxcc configure\n")
+               + shlex.quote(sys.executable) + ' -m mxcc "$@"\n')
     path.write_text(content)
     path.chmod(0o700)
     return str(path)

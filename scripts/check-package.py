@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check a built .deb and smoke-test its Qt runtime without installing it."""
 import argparse
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -25,6 +26,10 @@ required = {
     "./usr/lib/mx-creative-control/python/mxcc/device_interaction.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_views.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_navigation.py",
+    "./usr/lib/mx-creative-control/python/mxcc/customization.py",
+    "./usr/lib/mx-creative-control/python/mxcc/action_ring.py",
+    "./usr/lib/mx-creative-control/python/mxcc/ring_editor.py",
+    "./usr/lib/mx-creative-control/python/mxcc/ring_configuration.py",
     "./usr/lib/udev/rules.d/70-mx-creative-control.rules",
     "./usr/lib/systemd/user/mx-creative-control.service",
     "./usr/share/polkit-1/actions/org.mxcreativecontrol.setup-permissions.policy",
@@ -134,7 +139,8 @@ window.console.cards['test-dialpad'].click()
 assert window.views.currentWidget() is window.details
 assert window.details.title.text() == 'MX Dialpad'
 assert len(window.details.mapping_combos) == 6
-assert all(combo.count() == 0 and combo.isEnabled() for combo in window.details.mapping_combos.values())
+assert all(combo.count() == (2 if identifier.startswith('button:') else 0) and combo.isEnabled()
+           for identifier, combo in window.details.mapping_combos.items())
 window.details.art.hotspots['button:1'].click()
 assert window.details.selected_control == 'button:1'
 assert window.details.control_rows['button:1'].property('selected')
@@ -248,6 +254,10 @@ window.console.cards['test-keypad'].click()
 assert window.views.currentWidget() is window.editor
 assert window.settings['launchers'] == saved['launchers']
 assert displayed_launchers() == expected + [None] * 5
+window.home.ring_card.click()
+assert window.views.currentWidget() is window.ring_page
+assert len(window.ring_editor.value()['layouts']['default']) <= 7
+assert window.ring_editor.canvas.add_button.isVisible()
 window.close()
 app.processEvents()
 print('Bundled device navigation, battery indicators, application cards, settings, activation metadata, packed Apps/native reorder, themes and runtime smoke: OK')
@@ -259,6 +269,11 @@ print('Bundled device navigation, battery indicators, application cards, setting
                     str(root / "config/mx-creative-control/runtime.json")],
                    env=environment, check=True)
     helper = root / "usr/lib/mx-creative-control/setup-permissions"
+    rule_value = next(node.value for node in ast.parse(helper.read_text()).body
+                      if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "RULE"
+                                                             for target in node.targets))
+    if ast.literal_eval(rule_value) != (root / "usr/lib/udev/rules.d/70-mx-creative-control.rules").read_bytes():
+        raise SystemExit("Permission repair and packaged udev rules do not match")
     rejected = subprocess.run([str(helper), "unexpected"], capture_output=True, text=True)
     if rejected.returncode != 1 or "accepts no arguments" not in rejected.stderr:
         raise SystemExit("Permission helper did not reject unexpected input")

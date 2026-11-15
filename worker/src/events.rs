@@ -15,6 +15,10 @@ pub enum Event {
     Tray(bool),
     Page(usize),
     Pause(bool),
+    OpenRing,
+    RingExited(String, Option<String>),
+    DeviceButtonsStatus(serde_json::Value),
+    DialpadButtonsStatus(serde_json::Value),
     Shutdown,
 }
 #[derive(Clone)]

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 const LAUNCH_FOCUS_TIMEOUT: Duration = Duration::from_secs(12);
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Foreground {
     pub window: u32,
     pub name: String,
@@ -19,6 +19,11 @@ pub enum Request {
     Pause { value: bool },
     Page { index: usize },
     Profile { id: Option<String> },
+    RingToggle {},
+    RingContext {},
+    RingExecute { token: String, slot: usize },
+    RingCancel { token: String },
+    RingConfigure { token: String },
     Shutdown {},
 }
 
@@ -39,6 +44,11 @@ pub struct Status {
     pub tray_available: bool,
     pub last_error: Option<String>,
     pub manual_profile: Option<String>,
+    pub ring_open: bool,
+    pub ring_supported: bool,
+    pub ring_error: Option<String>,
+    pub device_buttons: serde_json::Value,
+    pub dialpad_buttons: serde_json::Value,
 }
 
 pub struct State {
@@ -92,11 +102,17 @@ impl State {
             status: Status {
                 ok: true,
                 version: env!("CARGO_PKG_VERSION").into(),
-                capabilities: vec!["launcher_activation_v1".into()],
+                capabilities: vec![
+                    "launcher_activation_v1".into(),
+                    "actions_ring_v1".into(),
+                    "actions_ring_v2".into(),
+                ],
                 pid: std::process::id(),
                 connected: false,
                 keypad_access: false,
                 input_access: false,
+                ring_supported: session == "x11",
+                ring_error: None,
                 session,
                 focus_supported: false,
                 active_app: String::new(),
@@ -105,6 +121,9 @@ impl State {
                 tray_available: false,
                 last_error: None,
                 manual_profile: None,
+                ring_open: false,
+                dialpad_buttons: serde_json::json!({"available":false,"backend":"hidpp","active":[],"errors":[]}),
+                device_buttons: serde_json::json!({"available":false,"backend":"x11","active":[],"errors":[]}),
             },
         }
     }

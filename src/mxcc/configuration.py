@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from typing import Callable, Iterable
 
 from . import paths
 from .applications import Application, discover_applications
 from .profiles import DESKTOP_PATTERN, ID_PATTERN, ProfileError, atomic_json, validate_profile
+from .ring_configuration import compile_ring, default_ring, migrate_legacy_ring, validate_ring
 
 
 class ConfigurationError(ValueError):
@@ -30,7 +32,7 @@ def compact_launchers(launchers: list[str | None], apps: Iterable[Application]) 
     Available apps and Screenshot keep their relative order at the front.
     Unavailable apps follow them, then empty slots; the input is not mutated.
     """
-    available = {app.id for app in apps} | {"@screenshot"}
+    available = {app.id for app in apps} | {"@screenshot", "@action-ring"}
     active = [value for value in launchers if value in available]
     missing = [value for value in launchers if value is not None and value not in available]
     return active + missing + [None] * launchers.count(None)
@@ -45,14 +47,16 @@ def default_settings(apps: Iterable[Application]) -> dict:
         if chosen is None:
             chosen = next((app.id for app in apps if app.name.casefold() in names), None)
         launchers.append(chosen)
+    launchers = compact_launchers(launchers + ["@screenshot", None, None, None], apps)
     return {
         "version": 1,
-        "launchers": compact_launchers(launchers + ["@screenshot", None, None, None], apps),
+        "launchers": launchers,
         "profile_assignments": {},
         "auto_switch": True,
         "start_at_login": False,
         "show_labels": False,
         "theme": "system",
+        "action_ring": default_ring(launchers),
     }
 
 
@@ -60,7 +64,7 @@ def validate_settings(settings: object) -> dict:
     required = {"version", "launchers", "profile_assignments", "auto_switch", "start_at_login", "show_labels"}
     if not isinstance(settings, dict) or not required.issubset(settings):
         raise ConfigurationError("Settings must contain version, launchers, profile_assignments, auto_switch, start_at_login and show_labels")
-    if set(settings) - required - {"theme"}:
+    if set(settings) - required - {"theme", "action_ring"}:
         raise ConfigurationError("Settings contain unsupported fields")
     if type(settings["version"]) is not int or settings["version"] != 1:
         raise ConfigurationError("Settings version must be 1")
@@ -68,8 +72,8 @@ def validate_settings(settings: object) -> dict:
     if not isinstance(launchers, list) or len(launchers) != 9:
         raise ConfigurationError("Exactly nine launcher slots are required")
     for value in launchers:
-        if value is not None and value != "@screenshot" and (not isinstance(value, str) or not DESKTOP_PATTERN.fullmatch(value)):
-            raise ConfigurationError("Launcher slots must be desktop IDs, @screenshot or null")
+        if value is not None and value not in ("@screenshot", "@action-ring") and (not isinstance(value, str) or not DESKTOP_PATTERN.fullmatch(value)):
+            raise ConfigurationError("Launcher slots must be desktop IDs, @screenshot, @action-ring or null")
     assignments = settings["profile_assignments"]
     if not isinstance(assignments, dict) or len(assignments) > 1024:
         raise ConfigurationError("profile_assignments must be an object of at most 1024 entries")
@@ -85,7 +89,11 @@ def validate_settings(settings: object) -> dict:
     theme = settings.get("theme", "system")
     if not isinstance(theme, str) or theme not in ("system", "light", "dark"):
         raise ConfigurationError("theme must be system, light or dark")
-    return {**settings, "launchers": list(launchers), "profile_assignments": dict(assignments), "theme": theme}
+    try:
+        ring = validate_ring(settings.get("action_ring", default_ring(launchers)))
+    except ValueError as error:
+        raise ConfigurationError(str(error)) from error
+    return {**settings, "launchers": list(launchers), "profile_assignments": dict(assignments), "theme": theme, "action_ring": ring}
 
 
 def load_settings(apps: Iterable[Application] | None = None) -> dict:
@@ -95,7 +103,10 @@ def load_settings(apps: Iterable[Application] | None = None) -> dict:
             contents = stream.read(256 * 1024 + 1)
         if len(contents) > 256 * 1024:
             raise ConfigurationError("Settings file exceeds 256 KiB")
-        settings = validate_settings(json.loads(contents.decode("utf-8")))
+        raw = json.loads(contents.decode("utf-8"))
+        if isinstance(raw, dict) and "action_ring" in raw:
+            raw["action_ring"] = migrate_legacy_ring(raw["action_ring"])
+        settings = validate_settings(raw)
         settings["launchers"] = compact_launchers(
             settings["launchers"], discover_applications() if apps is None else apps,
         )
@@ -109,6 +120,25 @@ def load_settings(apps: Iterable[Application] | None = None) -> dict:
 def save_settings(settings: dict) -> None:
     data = validate_settings(settings)
     try:
+        try:
+            with paths.settings_path().open("rb") as stream:
+                previous = stream.read(256 * 1024 + 1)
+        except FileNotFoundError:
+            previous = b""
+        if previous and len(previous) <= 256 * 1024:
+            try:
+                original = json.loads(previous)
+                ring = original.get("action_ring", {}) if isinstance(original, dict) else {}
+                layouts = ring.get("layouts", {}) if isinstance(ring, dict) else {}
+                needs_backup = isinstance(layouts, dict) and any(isinstance(slots, list) and len(slots) == 8
+                                                               for slots in layouts.values())
+            except (ValueError, UnicodeError, RecursionError):
+                needs_backup = False
+            if needs_backup:
+                digest = hashlib.sha256(previous).hexdigest()[:12]
+                backup = paths.settings_path().with_name(f"settings.before-seven-action-ring-{digest}.json")
+                if not backup.exists():
+                    atomic_json(backup, original)
         atomic_json(paths.settings_path(), data)
     except OSError as error:
         raise ConfigurationError(f"Cannot save settings: {error}") from error
@@ -155,7 +185,9 @@ def compile_runtime(settings: dict, apps: Iterable[Application], profiles: dict[
     selections = {app.id: profile_for_app(app, profiles, settings["profile_assignments"]) for app in apps}
     launcher_keys: list[dict | None] = []
     for app_id in compact_launchers(settings["launchers"], apps):
-        if app_id == "@screenshot":
+        if app_id == "@action-ring":
+            launcher_keys.append({"label": "Action Ring", "action": {"type": "open_ring"}, "image": face("Action Ring", "view-grid")})
+        elif app_id == "@screenshot":
             launcher_keys.append({"label": "Screenshot", "action": {"type": "screenshot"}, "image": face("Screenshot", "applets-screenshooter")})
         elif app_id in indexed:
             app = indexed[app_id]
@@ -202,4 +234,5 @@ def compile_runtime(settings: dict, apps: Iterable[Application], profiles: dict[
                 runtime_profiles[profile_id]["wm_classes"].append(wm_class)
     if len(runtime_profiles) > 256 or any(len(profile["wm_classes"]) > 64 for profile in runtime_profiles.values()):
         raise ConfigurationError("Runtime supports at most 256 profiles and 64 window classes per profile")
-    return {"version": 1, "auto_switch": settings["auto_switch"], "pages": pages, "profiles": list(runtime_profiles.values())}
+    return {"version": 1, "auto_switch": settings["auto_switch"], "pages": pages, "profiles": list(runtime_profiles.values()),
+            "action_ring": compile_ring(settings["action_ring"], apps, selections)}

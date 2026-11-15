@@ -562,6 +562,45 @@ class ConsoleCard(_DeviceCardBase):
         self.update()
 
 
+class _RingArt(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(self.width() / 2, self.height() / 2)
+        accent = self.palette().color(QPalette.ColorRole.Highlight)
+        surface = self.palette().color(QPalette.ColorRole.Base)
+        painter.setPen(QPen(accent, 2))
+        painter.setBrush(surface)
+        for index in range(8):
+            angle = radians(index * 45 - 90)
+            rect = QRectF(78 * cos(angle) - 21, 78 * sin(angle) - 21, 42, 42)
+            painter.drawRoundedRect(rect, 14, 14)
+        painter.setBrush(accent)
+        painter.drawEllipse(QPointF(0, 0), 26, 26)
+        painter.setPen(QPen(surface, 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(QPointF(-8, 0), QPointF(8, 0))
+        painter.drawLine(QPointF(0, -8), QPointF(0, 8))
+
+
+class ActionRingCard(_DeviceCardBase):
+    def __init__(self, parent=None):
+        super().__init__("device", parent)
+        old_art = self.art
+        self.art = _RingArt(self)
+        self.layout().replaceWidget(old_art, self.art)
+        old_art.hide()
+        old_art.deleteLater()
+        self.indicator_row.hide()
+        self.name_label.setText("Action Ring")
+        self.support_label.setText("Your shortcuts, around your cursor")
+        self.setAccessibleName("Configure Action Ring")
+        self.setToolTip("Configure up to seven actions and app-specific rings")
+
+
 class _DeviceGallery(QWidget):
     """A small wrapping layout whose minimum width never locks its old columns."""
 
@@ -606,6 +645,7 @@ class _DeviceGallery(QWidget):
 
 class DevicesHome(QWidget):
     device_selected = Signal(str)
+    ring_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -632,6 +672,9 @@ class DevicesHome(QWidget):
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.gallery = _DeviceGallery()
+        self.ring_card = ActionRingCard(self.gallery)
+        self.ring_card.clicked.connect(self.ring_requested)
+        self.gallery.set_items([self.ring_card])
         self.scroll.setWidget(self.gallery)
         layout.addWidget(self.scroll, 1)
         self.empty_state = QWidget()
@@ -645,7 +688,7 @@ class DevicesHome(QWidget):
             empty_layout.addWidget(widget)
         empty_layout.addStretch()
         layout.addWidget(self.empty_state, 1)
-        self.scroll.hide()
+        self.empty_state.hide()
 
     def update_devices(self, devices):
         devices = tuple(devices)
@@ -673,9 +716,9 @@ class DevicesHome(QWidget):
                 self.cards[identifier].update_device(value)
             self.cards[identifier].set_scanning(self._scanning, self._force_search)
             ordered.append(self.cards[identifier])
-        self.gallery.set_items(ordered)
-        self.scroll.setVisible(bool(devices))
-        self.empty_state.setVisible(not devices)
+        self.gallery.set_items([*ordered, self.ring_card])
+        self.scroll.show()
+        self.empty_state.hide()
         count = len(devices)
         self.subtitle.setText(f"{count} Logitech {'device' if count == 1 else 'devices'} · Select one to get started."
                               if count else "Your connected Logitech devices will appear here.")

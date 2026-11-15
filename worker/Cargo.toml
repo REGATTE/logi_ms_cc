@@ -1,6 +1,6 @@
 [package]
 name = "mx-creative-worker"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -15,7 +15,7 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
-x11rb = "0.14"
+x11rb = { version = "0.14", features = ["xinput"] }
 signal-hook = "0.3"
 
 [profile.release]

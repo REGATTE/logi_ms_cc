@@ -149,6 +149,41 @@ pub fn start(sender: Sender) {
     });
 }
 
+/// Read focus synchronously for a user-triggered ring. The watcher may still
+/// have an older event queued when the button is pressed.
+pub fn current() -> Result<Foreground, String> {
+    let read = || -> Result<Foreground, Box<dyn std::error::Error>> {
+        let (conn, screen) = x11rb::connect(None)?;
+        let root = conn.setup().roots[screen].root;
+        let atom = |name: &[u8]| -> Result<Atom, Box<dyn std::error::Error>> {
+            Ok(conn.intern_atom(false, name)?.reply()?.atom)
+        };
+        let active = atom(b"_NET_ACTIVE_WINDOW")?;
+        let window = conn
+            .get_property(false, root, active, AtomEnum::WINDOW, 0, 1)?
+            .reply()?
+            .value32()
+            .and_then(|mut values| values.next())
+            .unwrap_or(0);
+        Ok(read_foreground(
+            &conn,
+            window,
+            atom(b"WM_CLASS")?,
+            atom(b"_GTK_APPLICATION_ID")?,
+            atom(b"_NET_WM_DESKTOP_FILE")?,
+        )?)
+    };
+    read().map_err(|error| format!("Cannot read the active application: {error}"))
+}
+
+pub fn is_ring(foreground: &Foreground) -> bool {
+    foreground
+        .identities
+        .iter()
+        .chain(std::iter::once(&foreground.name))
+        .any(|identity| identity.eq_ignore_ascii_case("mx-creative-control-ring"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

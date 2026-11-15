@@ -23,5 +23,8 @@ this behavior. The node library's MIT notice is included in `licenses/`.
 HID++ page-button control uses feature 0x1b04 documented by OpenLogi's
 `openlogi-hidpp/src/feature/reprog_controls.rs`. Only temporary diversion is
 changed, and the original diversion bit is restored when the worker stops.
+The dialpad button backend uses the same feature and original Rust framing.
+Live queries and individually confirmed button presses verified its control IDs:
+top-left `0x53`, top-middle `0x56`, bottom-left `0x59`, bottom-right `0x5a`.
 
 Other Rust dependencies retain their respective licenses in Cargo metadata.

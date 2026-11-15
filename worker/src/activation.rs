@@ -308,6 +308,119 @@ fn activate(desktop_id: &str, wm_classes: &[String]) -> Result<Option<Activation
     }))
 }
 
+/// Restore the captured target and confirm the window manager accepted it
+/// before emitting a shortcut. A closed/reused XID is never a new target.
+pub fn restore_exact(
+    target: &mx_creative_worker::control::Foreground,
+) -> std::result::Result<(), String> {
+    fn restore(target: &mx_creative_worker::control::Foreground) -> Result<()> {
+        use std::{
+            os::fd::AsRawFd,
+            time::{Duration, Instant},
+        };
+        if target.window == 0 {
+            return Err("No application was active when the ring opened".into());
+        }
+        let (conn, screen) = x11rb::connect(None)?;
+        let root = conn.setup().roots[screen].root;
+        let atoms = Atoms::new(&conn)?;
+        let actual = match candidate(&conn, target.window, &atoms) {
+            Ok(actual) => actual,
+            Err(ReplyError::X11Error(error)) if error.error_kind == ErrorKind::Window => {
+                return Err(
+                    "The original application window was closed; shortcut cancelled".into(),
+                );
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let same = actual.eligible
+            && target
+                .identities
+                .iter()
+                .chain(std::iter::once(&target.name))
+                .any(|identity| {
+                    !identity.is_empty()
+                        && (actual
+                            .classes
+                            .iter()
+                            .any(|class| class.eq_ignore_ascii_case(identity))
+                            || desktop_stem(&actual.gtk_app_id).eq_ignore_ascii_case(identity)
+                            || desktop_stem(&actual.desktop_file).eq_ignore_ascii_case(identity))
+                });
+        if !same {
+            return Err("The original application window is no longer available".into());
+        }
+        conn.change_window_attributes(
+            root,
+            &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+                .event_mask(EventMask::PROPERTY_CHANGE),
+        )?
+        .check()?;
+        let active = || -> Result<u32> {
+            Ok(
+                numbers(&property(&conn, root, atoms.active, AtomEnum::WINDOW)?)
+                    .first()
+                    .copied()
+                    .unwrap_or(0),
+            )
+        };
+        if active()? == target.window {
+            return Ok(());
+        }
+        let timestamp = server_timestamp(&conn, root, atoms.timestamp)?;
+        if let Some(desktop) = actual.desktop.filter(|desktop| *desktop != u32::MAX) {
+            request(
+                &conn,
+                root,
+                root,
+                atoms.current_desktop,
+                [desktop, timestamp, 0, 0, 0],
+            )?;
+        }
+        request(
+            &conn,
+            root,
+            target.window,
+            atoms.active,
+            [2, timestamp, 0, 0, 0],
+        )?;
+        conn.flush()?;
+        let deadline = Instant::now() + Duration::from_millis(900);
+        loop {
+            if active()? == target.window {
+                return Ok(());
+            }
+            while conn.poll_for_event()?.is_some() {}
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(
+                    "The original application did not accept focus; shortcut cancelled".into(),
+                );
+            }
+            let mut fd = libc::pollfd {
+                fd: conn.stream().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: fd points to one valid descriptor, timeout is bounded.
+            if unsafe {
+                libc::poll(
+                    &mut fd,
+                    1,
+                    remaining.as_millis().min(i32::MAX as u128) as i32,
+                )
+            } < 0
+            {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error.into());
+                }
+            }
+        }
+    }
+    restore(target).map_err(|error| format!("Cannot return to the original application: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

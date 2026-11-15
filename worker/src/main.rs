@@ -1,9 +1,12 @@
 mod activation;
+mod device_buttons;
+mod dialpad_buttons;
 mod events;
 mod focus;
 mod hardware;
 mod ipc;
 mod launcher;
+mod ring;
 mod tray;
 use events::{Event, Sender};
 use mx_creative_worker::{
@@ -28,6 +31,7 @@ struct Options {
     runtime_base: Option<PathBuf>,
     gui: PathBuf,
     no_tray: bool,
+    no_keypad: bool,
     check: bool,
 }
 impl Options {
@@ -54,14 +58,16 @@ impl Options {
             runtime_base: Some(runtime),
             gui: "/usr/bin/mx-creative-control".into(),
             no_tray: false,
+            no_keypad: false,
             check: false,
         };
         let mut args = env::args_os().skip(1);
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("--no-tray") => result.no_tray = true,
+                Some("--no-keypad") => result.no_keypad = true,
                 Some("--help") => {
-                    println!("mxcc-worker [--config PATH] [--cache PATH] [--socket PATH] [--gui-command PATH] [--no-tray]\nmxcc-worker --check-config PATH");
+                    println!("mxcc-worker [--config PATH] [--cache PATH] [--socket PATH] [--gui-command PATH] [--no-tray] [--no-keypad]\nmxcc-worker --check-config PATH");
                     std::process::exit(0);
                 }
                 Some("--version") => {
@@ -98,7 +104,9 @@ impl Options {
 
 fn action(action: &Action, keyboard: &mut Option<Keyboard>) -> Result<(), String> {
     match action {
-        Action::Launch { .. } => Err("Launcher actions require desktop activation".into()),
+        Action::Launch { .. } | Action::OpenRing {} => {
+            Err("Launcher actions require desktop activation".into())
+        }
         Action::None {} => Ok(()),
         Action::Shortcut { .. } | Action::Screenshot {} => {
             let keys = if let Action::Shortcut { keys } = action {
@@ -112,6 +120,68 @@ fn action(action: &Action, keyboard: &mut Option<Keyboard>) -> Result<(), String
                 .chord(&keys)
                 .map_err(|e| e.to_string())
         }
+    }
+}
+
+fn execute_action(
+    action_value: &Action,
+    state: &mut State,
+    launcher: &mut launcher::Launcher,
+    keyboard: &mut Option<Keyboard>,
+) -> Result<bool, String> {
+    if let Action::Launch {
+        desktop_id,
+        wm_classes,
+        profile_id,
+    } = action_value
+    {
+        let now = Instant::now();
+        let mut redraw = false;
+        match launcher.activate(desktop_id, wm_classes, state.status.session == "x11", now)? {
+            launcher::Outcome::Existing(window) => {
+                if window.already_active {
+                    redraw |= state.focus_changed(
+                        Foreground {
+                            window: window.window,
+                            name: window.wm_class.clone(),
+                            identities: vec![window.wm_class],
+                        },
+                        now,
+                    );
+                }
+                redraw |= state.launch_succeeded(
+                    desktop_id,
+                    wm_classes,
+                    profile_id.as_deref(),
+                    Some(window.window),
+                    window.already_active,
+                    now,
+                );
+            }
+            launcher::Outcome::Started => {
+                redraw |= state.launch_succeeded(
+                    desktop_id,
+                    wm_classes,
+                    profile_id.as_deref(),
+                    None,
+                    false,
+                    now,
+                );
+            }
+            launcher::Outcome::Pending => {}
+        }
+        Ok(redraw)
+    } else {
+        action(action_value, keyboard).map(|_| false)
+    }
+}
+
+fn refresh_focus(state: &mut State) -> bool {
+    match focus::current() {
+        Ok(foreground) if !focus::is_ring(&foreground) => {
+            state.focus_changed(foreground, Instant::now())
+        }
+        _ => false,
     }
 }
 
@@ -139,6 +209,23 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         "x11"
     };
     let mut state = State::new(config, session.into());
+    let mut ring = ring::Ring::default();
+    let buttons = if session == "x11" {
+        Some(device_buttons::start(
+            sender.clone(),
+            state.config.action_ring.bindings.clone(),
+        ))
+    } else {
+        None
+    };
+    let dialpad = if session == "x11" {
+        Some(dialpad_buttons::start(
+            sender.clone(),
+            state.config.action_ring.bindings.clone(),
+        ))
+    } else {
+        None
+    };
     if session == "x11" {
         focus::start(sender.clone());
     }
@@ -167,6 +254,10 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut tray_state = None;
     while !quit {
         redraw |= state.tick(Instant::now());
+        if ring.tick() {
+            redraw |= refresh_focus(&mut state);
+        }
+        state.status.ring_open = ring.is_open();
         if Instant::now() >= retry {
             retry = Instant::now() + Duration::from_secs(5);
             if keyboard.is_none() {
@@ -183,7 +274,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            if keypad.is_none() {
+            if keypad.is_none() && !options.no_keypad {
                 match hardware::discover() {
                     Ok(Some(path)) => {
                         state.status.connected = true;
@@ -224,14 +315,101 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = rx.try_recv() {
             match event {
                 Event::Request(request, reply, written) => {
+                    let mut ending_ring = None;
                     let result: Result<(), String> = match request {
                         Request::Status {} => {
                             let _ = reply.send(serde_json::to_value(&state.status)?);
                             continue;
                         }
+                        Request::RingContext {} => {
+                            let response = ring.context().unwrap_or_else(
+                                |error| serde_json::json!({"ok":false,"error":error}),
+                            );
+                            let _ = reply.send(response);
+                            continue;
+                        }
+                        Request::RingToggle {} => {
+                            let response = match ring.toggle(
+                                &state.config.action_ring,
+                                &options.gui,
+                                &sender,
+                                session,
+                                state.status.paused,
+                            ) {
+                                Ok(open) => {
+                                    state.status.ring_error = None;
+                                    state.status.ring_open = open;
+                                    serde_json::json!({"ok":true,"open":open})
+                                }
+                                Err(error) => {
+                                    state.status.ring_error = Some(error.clone());
+                                    serde_json::json!({"ok":false,"error":error})
+                                }
+                            };
+                            let _ = reply.send(response);
+                            continue;
+                        }
+                        Request::RingCancel { token } => match ring.take(&token) {
+                            Ok(session) => {
+                                ending_ring = Some(session);
+                                Ok(())
+                            }
+                            Err(error) => Err(error),
+                        },
+                        Request::RingConfigure { token } => match ring.take(&token) {
+                            Ok(session) => {
+                                let result = session.configure(&options.gui);
+                                ending_ring = Some(session);
+                                result
+                            }
+                            Err(error) => Err(error),
+                        },
+                        Request::RingExecute { token, slot } => match ring.take(&token) {
+                            Ok(session) => {
+                                let result = (|| -> Result<(), String> {
+                                    if state.status.paused {
+                                        return Err("Device actions are paused".into());
+                                    }
+                                    let selected = session.action(slot)?;
+                                    if matches!(
+                                        selected,
+                                        Action::Shortcut { .. } | Action::Screenshot {}
+                                    ) {
+                                        activation::restore_exact(&session.foreground)?;
+                                        redraw |= state.focus_changed(
+                                            session.foreground.clone(),
+                                            Instant::now(),
+                                        );
+                                    }
+                                    redraw |= execute_action(
+                                        &selected,
+                                        &mut state,
+                                        &mut launcher,
+                                        &mut keyboard,
+                                    )?;
+                                    Ok(())
+                                })();
+                                ending_ring = Some(session);
+                                result
+                            }
+                            Err(error) => Err(error),
+                        },
                         Request::Reload {} => match Config::load(&options.config) {
                             Ok(config) => {
+                                ring.close();
                                 state.reload(config);
+                                if let Some(dialpad) = &dialpad {
+                                    dialpad.update(
+                                        state.config.action_ring.bindings.clone(),
+                                        state.status.paused,
+                                    );
+                                }
+                                if let Some(buttons) = &buttons {
+                                    buttons.update(
+                                        state.config.action_ring.bindings.clone(),
+                                        state.status.paused,
+                                    );
+                                }
                                 state.status.last_error = None;
                                 redraw = true;
                                 if let Some(k) = keypad.as_mut() {
@@ -244,6 +422,15 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         },
                         Request::Pause { value } => {
                             state.status.paused = value;
+                            if value {
+                                ring.close();
+                            }
+                            if let Some(dialpad) = &dialpad {
+                                dialpad.update(state.config.action_ring.bindings.clone(), value);
+                            }
+                            if let Some(buttons) = &buttons {
+                                buttons.update(state.config.action_ring.bindings.clone(), value);
+                            }
                             Ok(())
                         }
                         Request::Page { index } => {
@@ -264,12 +451,19 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         Err(error) => serde_json::json!({"ok":false,"error":error}),
                     };
                     let _ = reply.send(response);
-                    if quit {
+                    if quit || ending_ring.is_some() {
                         let _ = written.recv_timeout(Duration::from_secs(1));
                     }
+                    if let Some(session) = ending_ring {
+                        ring.finish(session);
+                        redraw |= refresh_focus(&mut state);
+                    }
+                    state.status.ring_open = ring.is_open();
                 }
                 Event::Focus(foreground) => {
-                    redraw |= state.focus_changed(foreground, Instant::now());
+                    if !focus::is_ring(&foreground) && !ring.is_open() {
+                        redraw |= state.focus_changed(foreground, Instant::now());
+                    }
                 }
                 Event::FocusSupport(value) => redraw |= state.set_focus_supported(value),
                 Event::Tray(value) => state.status.tray_available = value,
@@ -277,7 +471,43 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = state.select_page(page);
                     redraw = true;
                 }
-                Event::Pause(value) => state.status.paused = value,
+                Event::Pause(value) => {
+                    state.status.paused = value;
+                    if value {
+                        ring.close();
+                    }
+                    if let Some(dialpad) = &dialpad {
+                        dialpad.update(state.config.action_ring.bindings.clone(), value);
+                    }
+                    if let Some(buttons) = &buttons {
+                        buttons.update(state.config.action_ring.bindings.clone(), value);
+                    }
+                }
+                Event::OpenRing => {
+                    match ring.toggle(
+                        &state.config.action_ring,
+                        &options.gui,
+                        &sender,
+                        session,
+                        state.status.paused,
+                    ) {
+                        Ok(_) => state.status.ring_error = None,
+                        Err(error) => {
+                            state.status.ring_error = Some(error.clone());
+                            state.status.last_error = Some(error);
+                        }
+                    }
+                    state.status.ring_open = ring.is_open();
+                }
+                Event::RingExited(token, error) => {
+                    if ring.exited(&token) {
+                        state.status.ring_error = error;
+                        redraw |= refresh_focus(&mut state);
+                    }
+                    state.status.ring_open = ring.is_open();
+                }
+                Event::DeviceButtonsStatus(status) => state.status.device_buttons = status,
+                Event::DialpadButtonsStatus(status) => state.status.dialpad_buttons = status,
                 Event::Shutdown => quit = true,
             }
         }
@@ -293,56 +523,45 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Press::Key(slot) if !state.status.paused => {
                         if let Some(key) = state.page().keys[slot].clone() {
-                            if let Action::Launch {
-                                desktop_id,
-                                wm_classes,
-                                profile_id,
-                            } = &key.action
-                            {
-                                let now = Instant::now();
-                                match launcher.activate(
-                                    desktop_id,
-                                    wm_classes,
-                                    session == "x11",
-                                    now,
+                            if matches!(key.action, Action::OpenRing {}) {
+                                match ring.toggle(
+                                    &state.config.action_ring,
+                                    &options.gui,
+                                    &sender,
+                                    session,
+                                    state.status.paused,
                                 ) {
-                                    Ok(launcher::Outcome::Existing(window)) => {
-                                        if window.already_active {
-                                            redraw |= state.focus_changed(
-                                                Foreground {
-                                                    window: window.window,
-                                                    name: window.wm_class.clone(),
-                                                    identities: vec![window.wm_class],
-                                                },
-                                                now,
-                                            );
+                                    Ok(_) => state.status.ring_error = None,
+                                    Err(error) => {
+                                        state.status.ring_error = Some(error.clone());
+                                        state.status.last_error = Some(error);
+                                    }
+                                }
+                            } else {
+                                if let Some(foreground) = ring.dismiss() {
+                                    if matches!(
+                                        key.action,
+                                        Action::Shortcut { .. } | Action::Screenshot {}
+                                    ) {
+                                        if let Err(error) = activation::restore_exact(&foreground) {
+                                            state.status.last_error = Some(error);
+                                            continue;
                                         }
-                                        redraw |= state.launch_succeeded(
-                                            desktop_id,
-                                            wm_classes,
-                                            profile_id.as_deref(),
-                                            Some(window.window),
-                                            window.already_active,
-                                            now,
-                                        );
+                                        redraw |= state.focus_changed(foreground, Instant::now());
+                                    }
+                                }
+                                match execute_action(
+                                    &key.action,
+                                    &mut state,
+                                    &mut launcher,
+                                    &mut keyboard,
+                                ) {
+                                    Ok(changed) => {
+                                        redraw |= changed;
                                         state.status.last_error = None;
                                     }
-                                    Ok(launcher::Outcome::Started) => {
-                                        redraw |= state.launch_succeeded(
-                                            desktop_id,
-                                            wm_classes,
-                                            profile_id.as_deref(),
-                                            None,
-                                            false,
-                                            now,
-                                        );
-                                        state.status.last_error = None;
-                                    }
-                                    Ok(launcher::Outcome::Pending) => {}
                                     Err(error) => state.status.last_error = Some(error),
                                 }
-                            } else if let Err(error) = action(&key.action, &mut keyboard) {
-                                state.status.last_error = Some(error);
                             }
                         }
                     }
@@ -378,7 +597,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         if keypad.as_ref().is_some_and(|k| !k.pending.is_empty()) {
             continue;
         }
-        let mut timeout = if keypad.is_none() || keyboard.is_none() {
+        let mut timeout = if (keypad.is_none() && !options.no_keypad) || keyboard.is_none() {
             retry
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -396,7 +615,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 };
             }
         }
-        if let Some(deadline) = state.deadline() {
+        if let Some(deadline) = state.deadline().into_iter().chain(ring.deadline()).min() {
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -441,6 +660,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    ring.close();
+    drop(buttons);
+    drop(dialpad);
     if let Some(k) = keypad.as_mut() {
         k.restore();
     }

@@ -6,16 +6,18 @@ A lightweight Ubuntu app for the Logitech MX Creative **Keypad**. Launch your ap
 
 The live device home screen, with the keypad and dialpad grouped as MX Creative Console.
 
-This is an independent community project, not Logitech's Logi Options+ software. The home screen lists connected Logitech devices. Keypad assignments work now; other devices have control-mapping pages with empty action choices.
+This is an independent community project, not Logitech's Logi Options+ software. The home screen lists connected Logitech devices and an Action Ring editor.
 
 ## Features
 
 - **Device home screen:** the keypad and dialpad share an MX Creative Console card. Open it to choose a component, then select the keypad for its Keys editor. Other connected Logitech devices open their own controls and connection details. Refresh and Settings icons stay at the bottom left on every page; Settings opens global preferences.
-- **Device control discovery:** the dialpad shows four buttons, one **Dial** mapping and one **Roller** mapping; G402 offers only its **Back** and **Forward** buttons. Each wheel or dial has a single assignment whose eventual action determines what each direction does. Other models automatically list Ubuntu-reported buttons, keys and wheels. Each control has an empty assignment selector; these pages do not apply mappings yet. Some proprietary controls require a model description because Linux does not expose their physical layout.
+- **Consistent device editors:** the keypad, dialpad, mouse and newly discovered devices use the Action Ring editor's wide preview, application scope and rounded right-hand panel. Search keypad actions or device controls; selecting an illustrated control highlights its matching row. Connection details expand beneath the device.
+- **Action Ring:** up to seven configurable actions around the cursor, plus a separate **+** button that opens the editor, with a default layout and application-specific layouts. Use original app icons, launch or focus applications, send shortcuts, and take screenshots. Drag to reorder and import/export JSON. The native Qt popup exits after use.
+- **Device control discovery:** the dialpad shows four buttons, one **Dial** mapping and one **Roller** mapping; G402 offers only its **Back** and **Forward** buttons. Buttons can open the ring on X11. Other models automatically list Ubuntu-reported controls; standard mouse buttons can use the same ring backend when X11 identifies them. Wheels and other action types retain empty choices. Each wheel or dial remains a single assignment.
 - **Visual control selection:** click a control in the G402 or dialpad illustration to highlight and reveal its matching row. Selecting a row highlights the illustrated control too. Unknown device layouts keep list selection without guessing physical button positions.
 - **Connection indicators:** each device has a green dot when connected, red when disconnected, and blinking yellow while searching. On both the home screen and Console component selector, a reported battery percentage appears beside the dot beneath the device; devices without battery data show only the dot. Hover for connection details. Devices seen during the open window's session remain visible after disconnecting; unconfirmed connections use steady yellow.
 - **Original app icons:** artwork comes from installed desktop entries and icon themes, fills the key with a narrow black border, and has no added white tile. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
-- **Small background worker:** Rust handles the keypad, virtual shortcut input, panel icon and X11 focus events. The native Qt settings window runs only while open.
+- **Small background worker:** Rust handles the keypad, assigned device buttons, virtual shortcut input, panel icon and X11 focus events. Qt runs only while settings or the ring is open.
 - **System, light or dark appearance:** follows your desktop by default, with an immediate override in Settings. The window and panel use the same keypad icon.
 - **Installed-app discovery:** scan standard desktop entries, Snap and Flatpak applications; choose apps or Screenshot for the launcher.
 - **Focus or launch:** on X11, an app key brings an existing matching window forward; it launches the app only when no matching window exists.
@@ -54,8 +56,8 @@ Fetch the pinned Qt runtime and locked Rust dependencies, then build and check t
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.2.0_amd64.deb
-sudo apt install ./dist/mx-creative-control_0.2.0_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.3.0_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.3.0_amd64.deb
 mx-creative-control
 ```
 
@@ -73,11 +75,11 @@ The app and worker run as your normal user. Installation or **Settings → Permi
 
 Live console selection and keypad editor on the Ubuntu workstation.
 
-1. Select **MX Creative Console** on the home screen, then choose the keypad by clicking its image. Under **Keys**, select a key, choose an installed app or Screenshot, and press **Apply to key** at the bottom of the rounded right-hand inspector. The picker includes all installed apps; applying a key preserves that app's existing shortcut assignment.
+1. Select **MX Creative Console** on the home screen, then choose the keypad by clicking its image. Under **Keys**, select a key, search the right-hand action library for an installed app, Screenshot or Open Action Ring, and press **Apply to key**. The **+** beside the application icons selects the next empty key. The library includes all installed apps; applying a key preserves that app's existing shortcut assignment.
 2. Drag an Apps key onto another to insert it at that position and shift the other keys. Dropping onto a blank key appends it after the other apps. Reorders save and reload the keypad immediately; shortcut slots keep their assigned positions.
 3. **Applications** shows rounded cards for apps and Screenshot currently assigned to the keypad, in key order, with each app listed once. Each card shows its original icon and assigned keys. Search by name, choose a shortcut profile, **Import** a file, or **Edit** shortcuts (**Set up** when none are assigned). **Rescan apps** refreshes installed apps; add newly found apps through the picker under **Keys**.
 4. On X11, press an app key to focus its existing window or launch it. With automatic switching enabled and a profile assigned, the keypad shows that app's shortcuts while it is active and returns to Apps when focus leaves. Apps without a profile stay on Apps. In the editor, the app icons above the keypad select their shortcuts. The inspector's bottom actions include **Import shortcuts**, **Edit shortcuts**, **Use shortcuts on keypad**, and **Follow active app**. Arrow buttons and manual shortcut choices override automatic paging; **Follow active app** restores automatic matching.
-5. Use the back controls to return to the console or all devices. The Settings gear at the bottom left of every page opens **Settings → Appearance**, where you can choose **System setting**, **Light**, or **Dark**. System setting follows desktop changes automatically. Settings also contains **Permissions & connection**, labels, sign-in startup and configuration export. The keypad sidebar contains only **Keys** and **Applications**.
+5. Use the back controls to return to the console or all devices. The Settings gear at the bottom left of every page opens **Settings → Appearance**, where you can choose **System setting**, **Light**, or **Dark**. System setting follows desktop changes automatically. Settings also contains **Permissions & connection**, labels, sign-in startup and configuration export. The keypad's **Keys** and **Applications** tabs sit beside its title.
 
 Device discovery reads USB/HID inventory and connected Bluetooth device metadata while the settings window is open. It does not pair devices or change their configuration. Use the shared Refresh icon after connecting a device; the inventory also refreshes periodically. If multiple supported keypads are connected, the editor asks you to leave one connected so configuration has a single target.
 
@@ -90,6 +92,18 @@ Bundled profiles are in [`shortcuts/config/`](shortcuts/config/). User profiles 
 ```
 
 `XDG_CONFIG_HOME` is respected. Import a new file through the app, or copy it into that directory and rescan. Profiles contain labels, icon names and key combinations; they cannot contain scripts or shell commands. See [the JSON format and example](docs/PROFILES.md) and [shortcut references](shortcuts/README.md). When moving settings, desktop IDs can differ between Snap, Flatpak and distro installations; reassign the corresponding installed app where needed. Original artwork is resolved on the destination PC.
+
+## Configure the Action Ring
+
+Open **Action Ring** on the device home screen. Use the application icons and their **+** to choose or add an app-specific layout. Select a bubble to edit, or the ring’s separate **+** to add an action. The right-hand action library offers installed apps, keyboard shortcuts and Screenshot. Search, choose an action and press **Add action** or **Apply**. Drag bubbles to reorder them. **Try ring** opens the layout for the currently active application; the editor itself uses the default layout. Your existing keypad assignments stay unchanged.
+
+To open it from hardware, choose **Open Action Ring** for a keypad key or a button on a device's controls page. Press once, then click an action. Escape, clicking outside, or pressing the trigger again closes it. Keys **1–7**, or arrows followed by Enter, also select actions. The worker remembers the original app and confirms its window before sending a shortcut. The popup does not replace the keypad's active-app context.
+
+G402 Back/Forward capture suppresses the original navigation click. Dialpad buttons use temporary HID++ diversion, leaving the existing dial/roller setup alone; removing an assignment, pausing or quitting normally restores its prior state. If the worker is forcibly killed while a dialpad button is assigned, cycle the dialpad's power before using that button normally. Bindings apply to a model, so two identical models share assignments. Wayland ring support and continuous ring adjustments such as scrubbing are not implemented.
+
+The compact popup hides empty actions and supports at most seven actions. Its separate **+** always opens the matching ring editor, including when the ring is full. Previous eight-action layouts are backed up beside your settings before migration.
+
+Ring-only **Import/Export** transfers layouts while retaining this PC's button bindings. Global **Export configuration** includes both. See [Action Ring configuration](docs/ACTION-RING.md) for JSON and backend details.
 
 ## Develop and test
 
@@ -116,7 +130,7 @@ Automated tests do not access hardware. They cover app discovery, profiles and i
 ## Current limits
 
 - Wayland supports app launching, virtual shortcut input and manual profiles; focusing existing windows and automatic app/page detection are not implemented. Use an X11 session for those features.
-- Only the MX Creative Keypad executes configured actions. Other detected Logitech devices have control pages with empty assignment choices; G402 is limited to Back and Forward. Multiple connected keypads cannot be configured independently.
+- G402 Back/Forward, Bluetooth MX Dialpad buttons and recognized standard X11 mouse buttons can open the Action Ring. Other device actions remain unimplemented. Multiple connected keypads cannot be configured independently; identical device models share ring bindings.
 - Applications must expose desktop entries to be discovered. Profiles assume default app shortcuts, which can vary by version, focused widget or user configuration.
 - Validation covers one Ubuntu 24.04 amd64 workstation and physical keypad. Other environments need testing before being treated as supported.
 

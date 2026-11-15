@@ -1,7 +1,7 @@
 """Clickable regions for verified device drawings, without input-device access."""
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen, QRegion, QTransform
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QRegion, QTransform
 from PySide6.QtWidgets import QAbstractButton
 
 from .device_views import DeviceArt
@@ -81,7 +81,7 @@ class _ControlHotspot(QAbstractButton):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        accent = self.palette().color(QPalette.ColorRole.Accent)
+        accent = QColor("#60d6bd")
         active = self.isChecked()
         fill = QColor(accent)
         fill.setAlpha(85 if active else 45 if self.underMouse() else 12)

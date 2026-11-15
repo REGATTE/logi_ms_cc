@@ -12,6 +12,8 @@ import tempfile
 
 RULE = b'''# Only the USB MX Creative Keypad. Active local seat receives the device ACL.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c354", TAG+="uaccess"
+# Bluetooth MX Dialpad: assigned button diversion; wheels remain unchanged.
+SUBSYSTEM=="hidraw", KERNELS=="0005:046D:BC00.*", TAG+="uaccess"
 # Needed to emit configured shortcut keys; does not read existing keyboards.
 SUBSYSTEM=="misc", KERNEL=="uinput", OPTIONS+="static_node=uinput", TAG+="uaccess"
 '''
@@ -45,6 +47,10 @@ def main():
     run("/usr/bin/udevadm", "control", "--reload-rules")
     # Match the actual USB ancestor; do not re-trigger unrelated hidraw devices.
     for device in Path("/sys/class/hidraw").glob("hidraw*"):
+        hid_parent = (device / "device").resolve()
+        if hid_parent.name.startswith("0005:046D:BC00."):
+            run("/usr/bin/udevadm", "trigger", "--action=change", str(device))
+            continue
         for ancestor in (device.resolve(), *device.resolve().parents):
             try:
                 vendor = (ancestor / "idVendor").read_text().strip()
@@ -56,7 +62,7 @@ def main():
                 break
     run("/usr/bin/udevadm", "trigger", "--action=change", "--subsystem-match=misc", "--sysname-match=uinput")
     run("/usr/bin/udevadm", "settle", "--timeout=10")
-    print("Keypad and shortcut permissions refreshed for the active desktop session.")
+    print("Keypad, dialpad and shortcut permissions refreshed for the active desktop session.")
 
 
 if __name__ == "__main__":

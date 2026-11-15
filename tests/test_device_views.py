@@ -118,8 +118,9 @@ def test_rescan_preserves_existing_card_focus_and_removes_disconnected_devices(o
     assert "battery" not in card.toolTip()
     assert card.hasFocus()
     overview.update_devices([])
-    assert overview.empty_state.isVisible()
-    assert not overview.scroll.isVisible()
+    assert not overview.empty_state.isVisible()
+    assert overview.scroll.isVisible()
+    assert overview.ring_card.isVisible()
 
 
 def test_shared_footer_actions_and_busy_refresh(footer):

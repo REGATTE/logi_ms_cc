@@ -112,7 +112,7 @@ def test_starts_on_device_overview_and_only_selecting_keypad_opens_editor(window
 
 
 @pytest.mark.parametrize("kind", ["mouse", "dialpad"])
-def test_other_device_opens_empty_mapping_options_without_keypad_controls(window, kind):
+def test_other_device_offers_ring_on_buttons_only_without_keypad_controls(window, kind):
     if kind == "dialpad":
         click(window.home.cards[CREATIVE_CONSOLE_ID])
         click(window.console.cards[kind])
@@ -125,15 +125,79 @@ def test_other_device_opens_empty_mapping_options_without_keypad_controls(window
     assert window.details.values["connection"].text() == selected.connection
     assert window.details.values["status"].text() == "Connected"
     assert window.details.values["battery"].text() == ("81%" if kind == "dialpad" else "Not reported")
-    assert window.details.summary.text() == "Control assignments"
+    assert window.details.summary.text() == "ALL CONTROLS"
     assert len(window.details.mapping_combos) == (6 if kind == "dialpad" else 2)
-    for combo in window.details.mapping_combos.values():
+    for identifier, combo in window.details.mapping_combos.items():
         assert combo.isEnabled()
-        assert combo.count() == 0 and combo.currentIndex() == -1
-        assert combo.currentData() is None
+        if identifier.startswith("button:"):
+            assert combo.count() == 2 and combo.currentIndex() == 0
+            assert combo.currentData() is False
+            assert combo.itemText(1) == "Open Action Ring"
+        else:
+            assert combo.count() == 0 and combo.currentIndex() == -1
+            assert combo.currentData() is None
         assert combo.placeholderText() == "Not assigned"
     click(window.details.back_button)
     assert window.views.currentWidget() is (window.console if kind == "dialpad" else window.home)
+
+
+def test_ring_assignment_persists_and_is_restored_after_navigation(window):
+    import json
+    window.open_device("mouse")
+    window.details.mapping_combos["button:4"].setCurrentIndex(1)
+    expected = [{"vendor_id": 0x046d, "product_id": 0xc07e, "control_id": "button:4"}]
+    assert window.settings["action_ring"]["bindings"] == expected
+    assert json.loads(paths.runtime_path().read_text())["action_ring"]["bindings"] == expected
+    window.show_home()
+    window.open_device("mouse")
+    assert window.details.mapping_combos["button:4"].currentData() is True
+    window.details.mapping_combos["button:4"].setCurrentIndex(0)
+    assert window.settings["action_ring"]["bindings"] == []
+
+
+def test_control_search_and_artwork_selection_share_the_device_workspace(window):
+    window.open_device("dialpad")
+    details = window.details
+    before = paths.runtime_path().read_bytes()
+    details.search_edit.setFocus()
+    details.search_edit.setText("roller")
+    QApplication.processEvents()
+    assert [identifier for identifier, row in details.control_rows.items() if row.isVisible()] == ["wheel:roller"]
+    click(details.art.hotspots["button:1"])
+    assert details.search_edit.text() == ""
+    assert details.selected_title.text() == details.control_labels["button:1"]
+    assert details.control_rows["button:1"].isVisible()
+    details.search_edit.setText("missing control")
+    assert details.no_results.isVisible()
+    assert not details.controls_scroll.isVisible()
+    assert paths.runtime_path().read_bytes() == before
+    assert not details.facts.isVisible()
+    click(details.info_button)
+    assert details.facts.isVisible()
+    assert details.values["battery"].text() == "81%"
+    window.open_device("mouse")
+    assert details.search_edit.text() == ""
+    assert not details.facts.isVisible()
+    assert not details.edit_ring_button.isVisible()
+    details.mapping_combos["button:4"].setCurrentIndex(1)
+    assert details.edit_ring_button.isVisible()
+    requested = []
+    details.edit_ring_requested.connect(lambda: requested.append(True))
+    click(details.edit_ring_button)
+    assert requested == [True]
+
+
+def test_home_ring_editor_and_footer_return_without_touching_devices(window):
+    click(window.home.ring_card)
+    assert window.views.currentWidget() is window.ring_page
+    before = paths.runtime_path().read_bytes()
+    window.footer.settings_button.click()
+    assert window.views.currentWidget() is window.settings_page
+    window.settings_back.click()
+    assert window.views.currentWidget() is window.ring_page
+    window.ring_back.click()
+    assert window.views.currentWidget() is window.home
+    assert paths.runtime_path().read_bytes() == before
 
 
 def test_mapping_metadata_refresh_keeps_focus_and_does_not_write_assignments(window):
@@ -181,7 +245,7 @@ def test_illustration_and_control_rows_select_each_other(window, kind, row_id):
     details.mapping_combos["button:4"].setFocus()
     QApplication.processEvents()
     assert details.selected_control == details.art.selected_control == "button:4"
-    assert details.mapping_combos["button:4"].currentData() is None
+    assert details.mapping_combos["button:4"].currentData() is False
 
 
 def test_illustration_selection_reveals_offscreen_control_and_clears_removed_selection(window):
@@ -228,6 +292,7 @@ def test_new_device_controls_appear_and_empty_reports_do_not_invent_buttons(wind
     assert not window.details.mapping_combos
     assert window.details.controls_empty.isVisible()
     assert not window.details.controls_scroll.isVisible()
+    assert not window.details.explanation.isVisible()
     assert window.details.selected_control is None
     assert window.details.art.selected_control is None
 

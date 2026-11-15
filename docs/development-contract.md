@@ -1,9 +1,9 @@
 # Implementation contract
 
-The product is an Ubuntu MX Creative Keypad utility. Other Logitech devices have
-discovered control-mapping placeholders; executing their assignments is not yet
-implemented. A Rust worker owns HID, uinput, focus tracking,
-IPC and the tray. The PySide6 settings process exits when its window closes.
+The product is an Ubuntu MX Creative Console utility. A Rust worker owns HID,
+assigned button capture, uinput, focus tracking, IPC and the tray. The PySide6
+settings process exits when its window closes. Action Ring runs as a separate
+on-demand Qt process and never constructs the settings window.
 
 The initial Qt view is a Logitech-only device home screen. The keypad and dialpad
 appear under one MX Creative Console card, which opens a side-by-side component
@@ -17,8 +17,20 @@ bottom. App icons select their assigned shortcut views. Back controls return to
 the console and home. A shared footer outside
 the page stack keeps Refresh and Settings icons at the bottom left on every
 page. Settings opens global preferences and returns to the originating page.
-The dialpad and other devices open their own controls page with connection facts
-and intentionally empty assignment dropdowns. Multiple connected supported keypads block ambiguous configuration rather
+The keypad, Action Ring, dialpad and other devices use `CustomizationWorkspace`:
+a flat preview stage with application scope across the top and a rounded
+320-pixel action panel on the right. Shared mint selection styling follows
+the system/light/dark palette. The keypad has horizontal Keys/Applications
+navigation and a searchable action library; selecting an action does not save
+until Apply. Its plus button selects the next empty key, or keeps the selected
+key and explains replacement when full. The dialpad and other devices show
+searchable controls and expandable connection facts in the same workspace.
+Their assignments apply to all applications; per-app ring actions remain in
+the ring editor. Search does not change bindings, and choosing a device hotspot
+reveals a filtered-out row. Empty-control and disconnected-device states use
+the same surface without inventing available actions.
+Supported buttons offer Open Action Ring; other controls retain empty choices.
+Multiple connected supported keypads block ambiguous configuration rather
 than implying independent routing that the worker does not support.
 
 Keypad navigation contains only Keys and Applications. Applications lists only
@@ -30,10 +42,11 @@ empty layouts and searches without matches have distinct messages. Device
 permission status, repair, and reconnect controls belong to the global Settings
 page opened by the footer gear; authorization feedback is displayed there.
 
-Inventory belongs only to the GUI: read USB/HID sysfs metadata and bounded
-connected-device Bluetooth metadata through existing system tools. Do not open
-device input handles, start Bluetooth discovery, pair devices, or add worker
-polling. The scan runs asynchronously while settings is open; window closure
+General inventory belongs to the GUI: read USB/HID sysfs metadata and bounded
+connected-device Bluetooth metadata through existing system tools. Discovery does
+not open input handles, start Bluetooth discovery or pair devices. Assigned
+button backends are separate: XInput2 mouse grabs and scoped dialpad HID++.
+The inventory scan runs asynchronously while settings is open; window closure
 stops refreshes. Device illustrations are original Qt drawing code, with external
 visual references recorded in `docs/UI-REFERENCES.md` and no bundled screenshots.
 Each device has its own status dot: connected green, disconnected red, searching
@@ -58,9 +71,17 @@ override overly broad advertisements. The MX Dialpad uses its documented layout;
 G402 exposes only Back and Forward, retaining IDs `button:4` and `button:5`.
 Unknown models use Linux-reported controls and an honest availability note; no controls
 are invented if metadata is absent. IDs describe UI slots, not firmware codes.
-The UI keeps empty, enabled selectors with no callbacks that persist or execute
-assignments. Battery-only refreshes retain those widgets and keyboard focus.
-The existing functional keypad editor is separate from these placeholders.
+Supported button selectors persist model-scoped ring assignments. Other control
+selectors remain empty. Battery-only refreshes retain widgets and keyboard focus.
+The existing functional keypad editor remains separate from these controls.
+
+The home includes an Action Ring card. Its editor provides up to seven configured actions plus a separate add button,
+original app artwork, drag reordering, a default layout and per-app overrides.
+See `ACTION-RING.md` for the portable schema and input boundaries. The worker
+captures foreground and immutable actions before opening the popup, validates
+single-use tokens and restores the exact original window before shortcuts.
+Ring focus is excluded from keypad automatic paging. Qt owns the popup click
+grab; cancellation never replays the dismissal click into another application.
 
 `device_interaction.py` overlays shaped, keyboard-accessible controls on verified
 G402 and dialpad drawings. Hit regions use the same scale and letterboxing as
@@ -112,7 +133,7 @@ Profiles with no match can be assigned manually to a desktop app in settings.
 Image names are simple filenames relative to the keys cache; no paths/traversal.
 Pages have exactly nine optional keys. Supported action types: `launch`
 (desktop entry ID, `wm_classes` array and optional `profile_id`), `shortcut`
-(key combination), `screenshot` (Print), `none`. Empty tiles do nothing.
+(key combination), `screenshot` (Print), `open_ring`, `none`. Empty tiles do nothing.
 On X11, a launch action focuses an existing window matching its class candidates;
 only when no match exists is its desktop entry launched with `gtk-launch`, without
 a command shell. An assigned `profile_id` identifies the app's shortcut profile;
@@ -151,7 +172,8 @@ Status additionally contains `connected`, `keypad_access`, `input_access`,
 `session` (`x11`/`wayland`), `focus_supported`, `active_app`, `page`, `paused`,
 `version` and `capabilities`. The `launcher_activation_v1` capability identifies
 workers that accept launch activation metadata and manage the corresponding
-automatic pages. Settings checks this before reusing a running worker. If it
+automatic pages. The required `actions_ring_v2` capability additionally identifies
+workers with the ring config/session protocol. Settings checks this before reusing a running worker. If it
 is absent, settings verifies the replacement binary's version before requesting
 a normal shutdown and starting the compatible worker.
 Socket directory is user-owned mode 0700, socket mode 0600. Limit requests.
@@ -186,7 +208,7 @@ dict (atomic copy into user profile directory, reject malformed input).
 then retained missing IDs, then nulls; it does not modify the input list.
 `render_face(label, icon_name, app_or_none)` callback returns JPEG filename;
 frontend provides Qt icon rendering, compiler does not import Qt.
-Settings: `version:1`, `launchers` nine entries (desktop ID, `"@screenshot"`,
+Settings: `version:1`, `launchers` nine entries (desktop ID, `"@screenshot"`, `"@action-ring"`,
 or null), `profile_assignments` map desktop ID to profile ID, `auto_switch`
 boolean, `start_at_login` boolean, `show_labels` boolean.
 The optional `theme` setting is `system` (default), `light`, or `dark`; legacy
@@ -197,7 +219,7 @@ Qt process and does not enter the Rust runtime or trigger keypad image uploads.
 
 Use original icons from installed desktop entries/theme. No downloaded branding
 or invented app logos. Handle absent apps explicitly. Permissions are scoped
-to keypad 046d:c354 and uinput; no reading ordinary keyboards. Root-owned
+to keypad 046d:c354, Bluetooth dialpad 046d:bc00 and uinput; no reading ordinary keyboards. Root-owned
 polkit helper has a fixed operation and accepts no arbitrary paths/commands.
 X11 existing-window activation and automatic focus/page handling are supported;
 on Wayland report these integrations unavailable accurately and retain app

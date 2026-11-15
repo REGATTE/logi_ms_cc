@@ -115,6 +115,31 @@ def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app
     assert not window.timer.isActive()
 
 
+def test_action_library_search_and_add_preserve_layout_until_apply(isolated_qt, installed_app):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    before = paths.settings_path().read_bytes(), paths.runtime_path().read_bytes()
+    window.begin_add_launcher()
+    assert window.selected_slot == 1  # Screenshot already occupies the first key.
+    window.launcher_search.setText("EDITOR.DESKTOP")
+    visible = [window.launcher_actions.item(row) for row in range(window.launcher_actions.count())
+               if not window.launcher_actions.item(row).isHidden()]
+    assert [item.text() for item in visible] == [installed_app.name]
+    window.launcher_actions.setCurrentItem(visible[0])
+    assert window.selected_app() == installed_app
+    assert (paths.settings_path().read_bytes(), paths.runtime_path().read_bytes()) == before
+    window.apply_button.click()
+    assert window.settings["launchers"][:2] == ["@screenshot", installed_app.id]
+    assert window.launcher_actions.currentItem().data(Qt.ItemDataRole.UserRole) == installed_app.id
+    window.launcher_search.setText("No matching action")
+    assert not window.launcher_no_results.isHidden()
+    window.change_page(1)
+    assert window.launcher_actions.isHidden()
+    assert window.launcher_no_results.isHidden()
+    assert not window.shortcut_preview.isHidden()
+    assert window.shortcut_name.text()
+    assert window.shortcut_keys.text()
+
+
 def test_assigned_applications_follow_keypad_order_and_preserve_shortcuts(isolated_qt, installed_app):
     writer = replace(installed_app, id="writer.desktop", name="Writer")
     unused = replace(installed_app, id="unused.desktop", name="Unused")
@@ -373,6 +398,32 @@ def test_reopening_existing_window_recovers_lost_worker(isolated_qt, installed_a
     assert window.connection.text() == "Keypad connected"
     assert window.permission_labels["keypad"].text() == "Ready"
     assert window.notice.text() == ""
+
+
+def test_ring_plus_opens_captured_layout_without_resetting_worker_page(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    window.ring_editor.add_layout(installed_app.id)
+    before = paths.runtime_path().read_bytes()
+    window.connect_worker = True
+    status = connected_status() | {"page": 1}
+    request = Mock(return_value=status)
+    monkeypatch.setattr(gui.ipc, "request", request)
+    monkeypatch.setattr(gui.service, "ensure_running", Mock(return_value=status))
+
+    window.activate_settings(ring_layout=installed_app.id, add_ring_action=True)
+
+    assert window.views.currentWidget() is window.ring_page
+    assert window.ring_editor.current_layout == installed_app.id
+    assert window.page == 1
+    assert request.call_args_list == [call("status")]
+    assert paths.runtime_path().read_bytes() == before
+
+
+def test_ring_editor_initial_navigation_skips_home(isolated_qt, installed_app):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[],
+                            ring_layout="default", add_ring_action=True)
+    assert window.views.currentWidget() is window.ring_page
+    assert window.ring_editor.current_layout == "default"
 
 
 @pytest.mark.parametrize("failure_stage", ["ensure", "reload"])

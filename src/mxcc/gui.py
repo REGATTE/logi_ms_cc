@@ -9,9 +9,9 @@ from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
-    QToolButton, QVBoxLayout, QWidget,
+    QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__, ipc, service
@@ -19,6 +19,7 @@ from .applications import discover_applications
 from .application_views import ApplicationCard
 from .appearance import AppearanceController
 from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
+from .customization import CustomizationWorkspace
 from .device_navigation import DeviceDetails, DeviceScanner
 from .device_views import AppFooter, CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
 from .devices import discover_devices
@@ -27,6 +28,7 @@ from .key_button import KeyButton
 from .paths import cache_dir, profiles_dir, runtime_path
 from .profile_editor import ProfileEditor
 from .profiles import ProfileExistsError, atomic_json, import_profile, load_profiles
+from .ring_editor import RingEditor
 from .transfer import export_bundle, read_bundle, write_imported_profiles
 
 
@@ -45,8 +47,17 @@ def button(text: str, callback, primary: bool = False) -> QPushButton:
     return widget
 
 
+class _StatusNotice(QLabel):
+    """Reserve space for feedback only while there is a message to show."""
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, *, connect_worker: bool = True, applications=None, devices=None):
+    def __init__(self, *, connect_worker: bool = True, applications=None, devices=None,
+                 ring_layout=None, add_ring_action=False):
         super().__init__()
         setup_icon_theme()
         self.connect_worker = connect_worker
@@ -85,6 +96,7 @@ class MainWindow(QMainWindow):
         self.home = DevicesHome()
         self.views.addWidget(self.home)
         self.home.device_selected.connect(self.open_device)
+        self.home.ring_requested.connect(self.show_ring)
         self.console = ConsoleDevices()
         self.views.addWidget(self.console)
         self.console.back_requested.connect(self.show_home)
@@ -93,10 +105,9 @@ class MainWindow(QMainWindow):
         self.editor.setObjectName("editorPage")
         self.views.addWidget(self.editor)
         editor_layout = QVBoxLayout(self.editor)
-        editor_layout.setContentsMargins(0, 0, 0, 0)
-        editor_layout.setSpacing(0)
+        editor_layout.setContentsMargins(12, 16, 12, 0)
+        editor_layout.setSpacing(8)
         header = QHBoxLayout()
-        header.setContentsMargins(24, 20, 28, 14)
         header.setSpacing(12)
         self.back_button = button("←", self._back_to_devices)
         self.back_button.setObjectName("topbarButton")
@@ -105,35 +116,66 @@ class MainWindow(QMainWindow):
         header.addWidget(self.back_button)
         self.device_title = label("MX Creative Keypad", "deviceTitle")
         header.addWidget(self.device_title)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName("editorTabs")
+        self.navigation.setFlow(QListWidget.Flow.LeftToRight)
+        self.navigation.setWrapping(False)
+        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.navigation.setFixedSize(216, 40)
+        self.navigation.addItems(["Keys", "Applications"])
+        for row, width in enumerate((72, 140)):
+            self.navigation.item(row).setSizeHint(QSize(width, 36))
+        header.addWidget(self.navigation)
         header.addStretch()
         self.connection = label("Checking keypad…", "status")
         header.addWidget(self.connection)
         editor_layout.addLayout(header)
-        body = QWidget()
-        editor_layout.addWidget(body, 1)
-        outer = QHBoxLayout(body)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        self.navigation = QListWidget()
-        self.navigation.setObjectName("navigation")
-        self.navigation.setFixedWidth(158)
-        self.navigation.addItems(["Keys", "Applications"])
-        outer.addWidget(self.navigation)
         content = QVBoxLayout()
-        content.setContentsMargins(24, 8, 24, 20)
-        outer.addLayout(content, 1)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
+        editor_layout.addLayout(content, 1)
         self.stack = QStackedWidget()
         content.addWidget(self.stack, 1)
         self._build_customize()
         self._build_applications()
         self._build_settings()
-        self.notice = label("", "status", True)
+        self.notice = _StatusNotice()
+        self.notice.setObjectName("status")
+        self.notice.setWordWrap(True)
+        self.notice.setText("")
         content.addWidget(self.notice)
         self.navigation.currentRowChanged.connect(self._navigate_editor)
         self.navigation.setCurrentRow(0)
         self.details = DeviceDetails()
         self.details.back_requested.connect(self._back_to_devices)
+        self.details.assignment_changed.connect(self.assign_ring_button)
+        self.details.edit_ring_requested.connect(self.show_ring)
         self.views.addWidget(self.details)
+        self.ring_page = QWidget()
+        ring_page_layout = QVBoxLayout(self.ring_page)
+        ring_page_layout.setContentsMargins(12, 16, 12, 0)
+        ring_header = QHBoxLayout()
+        self.ring_back = button("←", self.show_home)
+        self.ring_back.setObjectName("topbarButton")
+        self.ring_back.setAccessibleName("All devices")
+        self.ring_back.setToolTip("All devices")
+        ring_header.addWidget(self.ring_back)
+        ring_header.addWidget(label("Action Ring", "deviceTitle"))
+        ring_header.addStretch()
+        ring_page_layout.addLayout(ring_header)
+        self.ring_editor = RingEditor(self.settings, self.apps, self.ring_page)
+        self.ring_editor.changed.connect(self.save_ring)
+        self.ring_editor.preview_requested.connect(self.preview_ring)
+        ring_scroll = QScrollArea()
+        ring_scroll.setObjectName("editorScroll")
+        ring_scroll.setWidgetResizable(True)
+        ring_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        ring_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        ring_scroll.setWidget(self.ring_editor)
+        ring_page_layout.addWidget(ring_scroll, 1)
+        self.views.addWidget(self.ring_page)
+        self.details.set_bindings(self.settings["action_ring"]["bindings"])
         self._populate_apps()
         self.persist(notify=False)
         self.refresh_keys()
@@ -141,7 +183,7 @@ class MainWindow(QMainWindow):
         self.timer.setInterval(1200)
         self.timer.timeout.connect(self.refresh_status)
         if connect_worker:
-            QTimer.singleShot(0, self.start_worker)
+            QTimer.singleShot(0, lambda: self.start_worker(preserve_context=ring_layout is not None))
             self.timer.start()
         else:
             self.connection.setText("Preview · worker not connected")
@@ -158,7 +200,10 @@ class MainWindow(QMainWindow):
             self.device_scanner.scanning.connect(self._set_device_scanning)
             QTimer.singleShot(0, self.refresh_devices)
             self.device_timer.start()
-        self.show_home()
+        if ring_layout is not None:
+            self.show_ring(ring_layout, add_action=add_ring_action)
+        else:
+            self.show_home()
 
     def refresh_devices(self, *, explicit=False):
         if self.device_scanner is not None:
@@ -233,6 +278,46 @@ class MainWindow(QMainWindow):
         self.views.setCurrentWidget(self.home)
         self.home.setFocus()
 
+    def show_ring(self, layout_id=None, *, add_action=False):
+        self.selected_device_id = None
+        self.ring_editor.set_settings(self.settings)
+        self.views.setCurrentWidget(self.ring_page)
+        if layout_id is not None:
+            self.ring_editor.open_layout(layout_id, add_action=add_action)
+
+    def save_ring(self):
+        try:
+            self.persist(settings={**self.settings, "action_ring": self.ring_editor.value()})
+            self.details.set_bindings(self.settings["action_ring"]["bindings"])
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.ring_editor.set_settings(self.settings)
+            QMessageBox.warning(self, "Could not save Action Ring", str(exc))
+
+    def assign_ring_button(self, control_id, assigned):
+        device = self.devices.get(self.selected_device_id)
+        if device is None:
+            return
+        binding = {"vendor_id": device.vendor_id, "product_id": device.product_id, "control_id": control_id}
+        ring = self.settings["action_ring"]
+        bindings = [item for item in ring["bindings"] if item != binding]
+        if assigned:
+            bindings.append(binding)
+        try:
+            self.persist(settings={**self.settings, "action_ring": {**ring, "bindings": bindings}})
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Could not save button assignment", str(exc))
+        self.details.set_bindings(self.settings["action_ring"]["bindings"])
+
+    def preview_ring(self):
+        if not self.connect_worker:
+            return
+        try:
+            response = ipc.request("ring_toggle", timeout=2)
+            if not response.get("ok"):
+                raise RuntimeError(response.get("error", "Could not open Action Ring"))
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Action Ring", str(exc))
+
     def show_console(self):
         if not any(is_console_device(device) for device in self.devices.values()):
             self.show_home()
@@ -257,11 +342,14 @@ class MainWindow(QMainWindow):
         if current is self.settings_page:
             return
         if return_to is None:
-            return_to = "editor" if current is self.editor else "console" if current is self.console else "details" if current is self.details else "home"
+            return_to = "ring" if current is self.ring_page else "editor" if current is self.editor else "console" if current is self.console else "details" if current is self.details else "home"
         self._settings_return = return_to
         self.views.setCurrentWidget(self.settings_page)
 
     def _leave_settings(self):
+        if self._settings_return == "ring":
+            self.show_ring()
+            return
         if self._settings_return == "console":
             self.show_console()
             return
@@ -276,25 +364,42 @@ class MainWindow(QMainWindow):
         self.show_home()
 
     def _build_customize(self):
-        widget = QWidget()
-        widget.setObjectName("editorStage")
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 16, 0, 0)
+        self.keypad_workspace = widget = CustomizationWorkspace()
+        layout = widget.stage_layout
         row = QHBoxLayout()
-        self.profile_strip = QHBoxLayout()
-        self.profile_strip.setSpacing(8)
+        self.keypad_scope = label("All applications", "section")
+        self.keypad_scope.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        row.addWidget(self.keypad_scope, 1)
+        profile_host = QWidget()
+        self.profile_strip = QHBoxLayout(profile_host)
+        self.profile_strip.setContentsMargins(0, 0, 0, 0)
+        self.profile_strip.setSpacing(5)
         self.profile_chips = []
-        row.addLayout(self.profile_strip)
-        row.addStretch()
+        self.profile_scroll = QScrollArea()
+        self.profile_scroll.setObjectName("editorProfiles")
+        self.profile_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.profile_scroll.setWidgetResizable(True)
+        self.profile_scroll.setFixedHeight(46)
+        self.profile_scroll.setMinimumWidth(42)
+        self.profile_scroll.setMaximumWidth(220)
+        self.profile_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.profile_scroll.setWidget(profile_host)
+        row.addWidget(self.profile_scroll)
+        add_application = QToolButton()
+        add_application.setObjectName("editorProfile")
+        add_application.setText("+")
+        add_application.setFixedSize(36, 36)
+        add_application.setToolTip("Add an application to the keypad")
+        add_application.setAccessibleName("Add keypad application")
+        add_application.clicked.connect(self.begin_add_launcher)
+        row.addWidget(add_application)
         layout.addLayout(row)
-        body = QHBoxLayout()
-        body.setSpacing(25)
-        layout.addLayout(body, 1)
-        device_column = QVBoxLayout()
-        device_column.addStretch()
+        self.keypad_description = label("Launch applications and switch to their shortcuts.", "muted", True)
+        layout.addWidget(self.keypad_description)
+        layout.addStretch()
         self.device = QFrame()
         self.device.setObjectName("device")
-        self.device.setFixedSize(396, 396)
+        self.device.setFixedSize(330, 330)
         grid = QGridLayout(self.device)
         grid.setContentsMargins(18, 18, 18, 18)
         grid.setSpacing(8)
@@ -302,59 +407,87 @@ class MainWindow(QMainWindow):
         for index in range(9):
             key = KeyButton(index, self.device)
             key.setObjectName("key")
-            key.setFixedSize(110, 110)
-            key.setIconSize(QSize(100, 100))
+            key.setFixedSize(88, 88)
+            key.setIconSize(QSize(80, 80))
             key.setCheckable(True)
             key.setAccessibleName(f"Key {index + 1}")
             key.clicked.connect(lambda checked=False, slot=index: self.select_key(slot))
             key.moved.connect(self.move_launcher)
             grid.addWidget(key, index // 3, index % 3)
             self.key_buttons.append(key)
-        device_column.addWidget(self.device, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.device, 0, Qt.AlignmentFlag.AlignHCenter)
         pages = QHBoxLayout()
         pages.addStretch()
         self.page_buttons = []
-        for index, text in enumerate(("01  Apps", "02  Shortcuts")):
+        for index, text in enumerate(("Apps", "Shortcuts")):
             control = button(text, lambda checked=False, p=index: self.change_page(p))
+            control.setObjectName("editorPageButton")
             control.setCheckable(True)
             self.page_buttons.append(control)
             pages.addWidget(control)
         pages.addStretch()
-        device_column.addLayout(pages)
+        layout.addLayout(pages)
         self.reorder_hint = label("Drag icons to reorder. Changes save automatically.", "muted", True)
         self.reorder_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        device_column.addWidget(self.reorder_hint)
-        device_column.addStretch()
-        body.addLayout(device_column, 1)
-        self.inspector = inspector = QFrame()
-        inspector.setObjectName("actionInspector")
-        inspector.setFixedWidth(320)
-        side = QVBoxLayout(inspector)
-        side.setContentsMargins(20, 22, 20, 22)
-        side.addWidget(label("Application", "section"))
-        self.app_combo = QComboBox()
-        self.app_combo.currentIndexChanged.connect(self._refresh_action_buttons)
-        side.addWidget(self.app_combo)
+        layout.addWidget(self.reorder_hint)
+        layout.addStretch()
+        self.inspector = widget.library
+        side = widget.panel
+        side.addWidget(label("ALL ACTIONS", "section"))
+        self.launcher_search = QLineEdit()
+        self.launcher_search.setObjectName("editorSearch")
+        self.launcher_search.setPlaceholderText("Search applications and actions")
+        self.launcher_search.setClearButtonEnabled(True)
+        self.launcher_search.textChanged.connect(self._filter_launcher_actions)
+        side.addWidget(self.launcher_search)
+        self.key_action_title = label("Application", "section")
+        side.addWidget(self.key_action_title)
         self.key_description = label("Choose an app or a system action for this key.", "muted", True)
         side.addWidget(self.key_description)
-        side.addSpacing(14)
+        self.app_combo = QComboBox(widget)
+        self.app_combo.hide()  # Selection model shared with import and profile actions.
+        self.app_combo.currentIndexChanged.connect(self._sync_launcher_action)
+        self.launcher_actions = QListWidget()
+        self.launcher_actions.setObjectName("editorApps")
+        self.launcher_actions.setIconSize(QSize(24, 24))
+        self.launcher_actions.setMinimumHeight(80)
+        self.launcher_actions.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.launcher_actions.currentRowChanged.connect(self.app_combo.setCurrentIndex)
+        side.addWidget(self.launcher_actions, 1)
+        self.launcher_no_results = label("No matching applications or actions", "muted", True)
+        self.launcher_no_results.hide()
+        side.addWidget(self.launcher_no_results)
+        self.shortcut_preview = QWidget()
+        shortcut_preview_layout = QVBoxLayout(self.shortcut_preview)
+        shortcut_preview_layout.setContentsMargins(0, 6, 0, 0)
+        self.shortcut_name = label("", "section", True)
+        self.shortcut_keys = label("", "muted", True)
+        shortcut_preview_layout.addWidget(self.shortcut_name)
+        shortcut_preview_layout.addWidget(self.shortcut_keys)
+        shortcut_preview_layout.addStretch()
+        side.addWidget(self.shortcut_preview, 1)
         self.active_label = label("Active application: —", "muted", True)
         side.addWidget(self.active_label)
-        side.addStretch()
-        self.apply_button = button("Apply to key", self.apply_key, True)
+        self.apply_button = button("Apply to key", self.apply_key)
+        self.apply_button.setObjectName("editorApply")
         side.addWidget(self.apply_button)
         self.import_button = button("Import shortcuts…", self.import_shortcuts)
         self.edit_button = button("Edit shortcuts…", self.edit_shortcuts)
-        side.addWidget(self.import_button)
-        side.addWidget(self.edit_button)
+        shortcuts = QHBoxLayout()
+        shortcuts.setSpacing(6)
+        self.import_button.setText("Import shortcuts")
+        self.edit_button.setText("Edit shortcuts")
+        shortcuts.addWidget(self.import_button)
+        shortcuts.addWidget(self.edit_button)
+        side.addLayout(shortcuts)
         self.use_shortcuts_button = button("Use shortcuts on keypad", self.use_preview_profile)
         side.addWidget(self.use_shortcuts_button)
         side.addWidget(button("Follow active app", self.follow_active_app))
-        body.addWidget(inspector)
         scroll = QScrollArea()
         scroll.setObjectName("editorScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(widget)
         self.stack.addWidget(scroll)
 
@@ -427,7 +560,7 @@ class MainWindow(QMainWindow):
         self.permission_labels = {}
         form = QFormLayout()
         form.setVerticalSpacing(22)
-        for key, title in (("keypad", "Keypad access"), ("input", "Shortcut input"),
+        for key, title in (("keypad", "Keypad access"), ("dialpad", "Dialpad button access"), ("input", "Shortcut input"),
                            ("focus", "App detection"), ("tray", "Panel icon")):
             value = label("Not checked", wrap=True)
             self.permission_labels[key] = value
@@ -515,9 +648,18 @@ class MainWindow(QMainWindow):
         self.app_combo.clear()
         self.app_combo.addItem("Empty key", None)
         self.app_combo.addItem(display_icon("applets-screenshooter"), "Screenshot", "@screenshot")
+        self.app_combo.addItem(display_icon("view-grid"), "Open Action Ring", "@action-ring")
         for app in self.apps:
             self.app_combo.addItem(display_icon(app.icon, application=True), app.name, app.id)
         self.app_combo.blockSignals(False)
+        self.launcher_actions.blockSignals(True)
+        self.launcher_actions.clear()
+        for index in range(self.app_combo.count()):
+            item = QListWidgetItem(self.app_combo.itemIcon(index), self.app_combo.itemText(index))
+            item.setData(Qt.ItemDataRole.UserRole, self.app_combo.itemData(index))
+            self.launcher_actions.addItem(item)
+        self.launcher_actions.blockSignals(False)
+        self._filter_launcher_actions(self.launcher_search.text())
         self._populate_application_cards()
         self.select_key(self.selected_slot)
         self._populate_profile_strip()
@@ -558,7 +700,7 @@ class MainWindow(QMainWindow):
 
         def chip(title, icon, profile_id):
             control = QToolButton()
-            control.setObjectName("profileChip")
+            control.setObjectName("editorProfile")
             control.setFixedSize(38, 38)
             control.setIconSize(QSize(24, 24))
             control.setCheckable(True)
@@ -581,6 +723,7 @@ class MainWindow(QMainWindow):
             if profile and profile["id"] not in added:
                 chip(f"{app.name} · shortcuts", display_icon(app.icon, application=True), profile["id"])
                 added.add(profile["id"])
+        self.profile_scroll.setFixedWidth(min(220, max(46, len(self.profile_chips) * 43)))
         self._refresh_profile_strip()
 
     def _select_profile_chip(self, profile_id):
@@ -593,6 +736,40 @@ class MainWindow(QMainWindow):
     def _refresh_profile_strip(self):
         for profile_id, control in self.profile_chips:
             control.setChecked(profile_id is None if self.page == 0 else profile_id == self.preview_profile_id)
+            if control.isChecked():
+                self.profile_scroll.ensureWidgetVisible(control)
+        profile = self.profiles.get(self.preview_profile_id, {})
+        self.keypad_scope.setText("All applications" if self.page == 0 else profile.get("name", "Shortcuts"))
+        self.keypad_description.setText("Launch applications and switch to their shortcuts." if self.page == 0
+                                       else "Application shortcuts · select a key to inspect its action.")
+
+    def begin_add_launcher(self):
+        self.change_page(0)
+        empty = next((index for index, key in enumerate(self.runtime["pages"][0]["keys"]) if key is None), None)
+        if empty is not None:
+            self.select_key(empty)
+        else:
+            self.notice.setText("All nine keys are assigned. Choose a key to replace its action.")
+        self.launcher_search.clear()
+        self.launcher_search.setFocus()
+
+    def _filter_launcher_actions(self, text):
+        query = text.strip().casefold()
+        visible = 0
+        for index in range(self.launcher_actions.count()):
+            item = self.launcher_actions.item(index)
+            matches = query in f"{item.text()} {item.data(Qt.ItemDataRole.UserRole) or ''}".casefold()
+            item.setHidden(not matches)
+            visible += matches
+        self.launcher_no_results.setVisible(not visible and self.page == 0)
+
+    def _sync_launcher_action(self, index):
+        self.launcher_actions.blockSignals(True)
+        self.launcher_actions.setCurrentRow(index)
+        if self.launcher_actions.currentItem() is not None:
+            self.launcher_actions.scrollToItem(self.launcher_actions.currentItem())
+        self.launcher_actions.blockSignals(False)
+        self._refresh_action_buttons()
 
     def fill_profile_combo(self, combo, app_id):
         combo.blockSignals(True)
@@ -609,6 +786,7 @@ class MainWindow(QMainWindow):
         self.import_button.setEnabled(self.page == 0 and self.selected_app() is not None)
         self.edit_button.setEnabled(self.page == 1 or self.selected_app() is not None)
         self.use_shortcuts_button.setEnabled(self.page == 1)
+        self.use_shortcuts_button.setVisible(self.page == 1)
 
     def selected_app(self):
         app_id = self.app_combo.currentData()
@@ -621,10 +799,22 @@ class MainWindow(QMainWindow):
         self.inspector.setAccessibleName(f"Key {slot + 1} settings")
         app_id = self.settings["launchers"][slot]
         self.app_combo.setCurrentIndex(max(0, self.app_combo.findData(app_id)))
+        self._sync_launcher_action(self.app_combo.currentIndex())
         self._refresh_action_buttons()
+        self.key_action_title.setText("Application" if self.page == 0 else "Shortcut")
         self.key_description.setText("Choose an app or a system action for this key." if self.page == 0 else "Edit this app’s shortcuts to change its keys.")
         self.app_combo.setEnabled(self.page == 0)
+        self.launcher_actions.setVisible(self.page == 0)
+        self.launcher_search.setVisible(self.page == 0)
+        self.shortcut_preview.setVisible(self.page == 1)
+        if self.page == 1:
+            profile = self.profiles.get(self.preview_profile_id, self.profiles.get("default", {}))
+            shortcut = next((item for item in profile.get("shortcuts", []) if item["slot"] == slot + 1), {})
+            self.shortcut_name.setText(shortcut.get("label", "Not assigned"))
+            self.shortcut_keys.setText(shortcut.get("keys", "Use Edit shortcuts to add an action here."))
+        self._filter_launcher_actions(self.launcher_search.text())
         self.apply_button.setEnabled(self.page == 0)
+        self.apply_button.setVisible(self.page == 0)
 
     def change_page(self, page):
         self.page = page
@@ -725,7 +915,7 @@ class MainWindow(QMainWindow):
         launchers[self.selected_slot] = self.app_combo.currentData()
         candidate = {**self.settings, "launchers": launchers,
                      "profile_assignments": dict(self.settings["profile_assignments"])}
-        available = {app.id for app in self.apps} | {"@screenshot"}
+        available = {app.id for app in self.apps} | {"@screenshot", "@action-ring"}
         selected = sum(app_id in available for app_id in launchers[:self.selected_slot])
         try:
             self.persist(settings=candidate)
@@ -785,6 +975,7 @@ class MainWindow(QMainWindow):
         self.profiles = load_profiles()
         self.safe_save()
         self._populate_apps()
+        self.ring_editor.set_applications(self.apps)
         self.notice.setText(f"Found {len(self.apps)} installed applications.")
 
     def filter_apps(self, text):
@@ -909,10 +1100,12 @@ class MainWindow(QMainWindow):
                 checkbox.blockSignals(False)
             self.persist()
             self._populate_apps()
+            self.ring_editor.set_settings(self.settings)
+            self.details.set_bindings(self.settings["action_ring"]["bindings"])
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.warning(self, "Import failed", str(exc))
 
-    def start_worker(self):
+    def start_worker(self, *, preserve_context=False):
         if not self.connect_worker:
             return
         self.connection.setText("Connecting keypad worker…")
@@ -920,6 +1113,12 @@ class MainWindow(QMainWindow):
             response = service.ensure_running()
             if not response.get("ok"):
                 raise RuntimeError(response.get("error", "The worker could not start."))
+            if preserve_context:
+                self.worker_sync_error = None
+                self.refresh_status()
+                self.page = self.status.get("page", 0)
+                self.refresh_keys()
+                return
             for command, values in (("reload", {}), ("page", {"index": 0})):
                 response = ipc.request(command, **values)
                 if not response.get("ok"):
@@ -933,14 +1132,17 @@ class MainWindow(QMainWindow):
             self.worker_sync_error = str(exc)
             self._worker_failed(exc)
 
-    def activate_settings(self):
+    def activate_settings(self, *, ring_layout=None, add_ring_action=False):
         """Reopening an existing window also repairs a lost worker connection."""
         self.showNormal()
         self.raise_()
         self.activateWindow()
-        self.show_home()
+        if ring_layout is not None:
+            self.show_ring(ring_layout, add_action=add_ring_action)
+        else:
+            self.show_home()
         self.refresh_devices()
-        self.start_worker()
+        self.start_worker(preserve_context=ring_layout is not None)
 
     def closeEvent(self, event):
         self.device_timer.stop()
@@ -965,9 +1167,18 @@ class MainWindow(QMainWindow):
             self._worker_failed(exc)
             return
         status = self.status
+        device = self.devices.get(self.selected_device_id)
+        if device is not None:
+            backend = status.get("dialpad_buttons" if device.product_id == 0xbc00 else "device_buttons", {})
+            self.details.set_backend_status("\n".join(backend.get("errors", [])))
         self.connection.setText("Paused" if status.get("paused") else "Keypad connected" if status.get("connected") else "Keypad disconnected")
         self.active_label.setText("Active application: " + (status.get("active_app") or "—"))
         self.permission_labels["keypad"].setText("Ready" if status.get("keypad_access") else "Connect the keypad or set up device access")
+        dialpad_status = status.get("dialpad_buttons", {})
+        self.permission_labels["dialpad"].setText(
+            "Permission required · use Set up device permissions below" if dialpad_status.get("permission_required") else
+            "Ready" if dialpad_status.get("active") else
+            "\n".join(dialpad_status.get("errors", [])) or "Assign a dialpad button to check access")
         self.permission_labels["input"].setText("Ready" if status.get("input_access") else "Permission required for /dev/uinput")
         self.permission_labels["focus"].setText("Ready · X11" if status.get("focus_supported") else "Manual selection · automatic detection unavailable")
         self.permission_labels["tray"].setText("Ready" if status.get("tray_available") else "No panel host found. Open settings from the application launcher; on GNOME, enable AppIndicator support.")
@@ -990,7 +1201,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Install the Ubuntu package", "Device permission setup is included in the .deb package. Install it first, then reopen this dialog.")
             return
         details = ("Ubuntu will ask for administrator authentication.\n\n"
-                   "This installs an access rule for the MX Creative Keypad and enables /dev/uinput so the app can send keyboard shortcuts. "
+                   "This installs access rules for the MX Creative Keypad and Bluetooth MX Dialpad, and enables /dev/uinput so the app can send keyboard shortcuts. "
                    "The input permission also lets other programs in your logged-in session create virtual input devices.\n\n"
                    "The settings window and background worker continue running as your normal user.")
         if QMessageBox.question(self, "Allow keypad and shortcut access?", details,

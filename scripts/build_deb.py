@@ -128,7 +128,7 @@ def main() -> None:
     for source, target, mode in assets:
         copy_file(ROOT / "packaging" / source, stage, target, mode)
     copy_file(worker, stage, "/usr/lib/mx-creative-control/mxcc-worker", 0o755)
-    for document in ("README.md", "docs/INSTALL.md", "docs/PROFILES.md", "docs/VALIDATION.md", "docs/UI-REFERENCES.md", "LICENSE", "worker/THIRD_PARTY.md"):
+    for document in ("README.md", "docs/INSTALL.md", "docs/PROFILES.md", "docs/ACTION-RING.md", "docs/VALIDATION.md", "docs/UI-REFERENCES.md", "LICENSE", "worker/THIRD_PARTY.md"):
         if (ROOT / document).is_file():
             copy_file(ROOT / document, stage, f"/usr/share/doc/{PACKAGE}/{Path(document).name}")
     if (ROOT / "worker/licenses").is_dir():

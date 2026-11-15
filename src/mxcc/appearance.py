@@ -102,6 +102,10 @@ QListWidget#navigation {{ background: {c['sidebar']}; border: none; padding: 16p
 QListWidget#navigation::item {{ padding: 12px 14px; margin: 4px 0; border-radius: 5px; }}
 QListWidget#navigation::item:hover {{ background: {c['hover']}; }}
 QListWidget#navigation::item:selected {{ background: {c['accent']}; color: {c['accent_text']}; }}
+QListWidget#editorTabs {{ background: transparent; border: none; outline: 0; }}
+QListWidget#editorTabs::item {{ padding: 6px 12px; border: 1px solid transparent; border-radius: 8px; }}
+QListWidget#editorTabs::item:hover {{ background: {c['alternate']}; }}
+QListWidget#editorTabs::item:selected {{ background: {c['alternate']}; color: {c['text']}; border-bottom: 3px solid #60d6bd; }}
 QPushButton {{ background: {c['control']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 9px 13px; }}
 QPushButton:hover {{ border-color: {c['focus']}; background: {c['hover']}; }}
 QPushButton:focus {{ border-color: {c['focus']}; }}
