@@ -1,8 +1,25 @@
 # Implementation contract
 
-The product is an Ubuntu MX Creative Keypad utility. Dialpad functionality is
-out of scope. A Rust worker owns HID, uinput, focus tracking, IPC and the tray.
-The PySide6 settings process exits when its window closes.
+The product is an Ubuntu MX Creative Keypad utility. Customization of the dialpad
+and other devices is out of scope. A Rust worker owns HID, uinput, focus tracking,
+IPC and the tray. The PySide6 settings process exits when its window closes.
+
+The initial Qt view is a Logitech-only device home screen. The keypad and dialpad
+appear under one MX Creative Console card, which opens a side-by-side component
+view with clickable component images and a sidebar selector. Selecting one
+connected supported keypad opens its Keys editor, with
+app/profile choices above the key preview and the selected-key inspector on the
+right. Back controls return to the console and home; the home Settings button
+opens global settings. The dialpad and other devices open a read-only details
+page. Multiple connected supported keypads block ambiguous configuration rather
+than implying independent routing that the worker does not support.
+
+Inventory belongs only to the GUI: read USB/HID sysfs metadata and bounded
+connected-device Bluetooth metadata through existing system tools. Do not open
+device input handles, start Bluetooth discovery, pair devices, or add worker
+polling. The scan runs asynchronously while settings is open; window closure
+stops refreshes. Device illustrations are original Qt drawing code, with external
+visual references recorded in `docs/UI-REFERENCES.md` and no bundled screenshots.
 
 Opening or reactivating settings ensures the worker is running, reloads the
 compiled runtime and selects Apps page 0. The worker is supervised by the
@@ -101,6 +118,13 @@ and `--no-tray` for test/headless use; defaults follow paths above.
 
 `mxcc.applications`: `Application` dataclass with `id`, `name`, `icon`,
 `exec_line`, `wm_class`, `path`; `discover_applications()` returns sorted apps.
+
+`mxcc.devices`: `Device` dataclass describes identity, name, kind, connection,
+connected/supported status, USB vendor/product IDs and optional battery/detail
+fields; `discover_devices()` returns the connected Logitech inventory.
+`mxcc.device_views` renders the home cards and original product illustrations;
+`mxcc.device_navigation` contains the asynchronous scanner and details view.
+`MainWindow(..., devices=inventory)` injects deterministic inventory for tests.
 
 `mxcc.profiles`: `ProfileError`, `load_profiles()` -> dict ID to profile dict,
 `validate_profile(data)` -> validated dict, `import_profile(path)` -> profile

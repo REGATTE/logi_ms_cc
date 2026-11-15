@@ -2,12 +2,15 @@
 
 A lightweight Ubuntu app for the Logitech MX Creative **Keypad**. Launch your apps from its nine LCD keys, use their original icons, and switch to shortcuts for the app you are working in.
 
-![MX Creative Control settings window](docs/screenshots/settings.png)
+![MX Creative Control device home screen](docs/screenshots/devices.png)
 
-This is an independent community project, not Logitech's Logi Options+ software. The wireless dialpad is outside its scope.
+The live device home screen, with the keypad and dialpad grouped as MX Creative Console.
+
+This is an independent community project, not Logitech's Logi Options+ software. The home screen lists connected Logitech devices; customization is available for the MX Creative Keypad only.
 
 ## Features
 
+- **Device home screen:** the keypad and dialpad share an MX Creative Console card. Open it to choose a component, then select the keypad for its Keys editor. The dialpad and other connected Logitech devices show connection details without offering unsupported controls. The Settings button opens global settings.
 - **Original app icons:** artwork comes from installed desktop entries and icon themes, fills the key with a narrow black border, and has no added white tile. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
 - **Small background worker:** Rust handles the keypad, virtual shortcut input, panel icon and X11 focus events. The native Qt settings window runs only while open.
 - **System, light or dark appearance:** follows your desktop by default, with an immediate override in Settings. The window and panel use the same keypad icon.
@@ -48,24 +51,32 @@ Fetch the pinned Qt runtime and locked Rust dependencies, then build and check t
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.4_amd64.deb
-sudo apt install ./dist/mx-creative-control_0.1.4_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.5_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.1.5_amd64.deb
 mx-creative-control
 ```
 
 The package bundles PySide6-Essentials and Shiboken **6.10.2** privately. Installation needs no pip setup; apt installs declared Ubuntu system dependencies. After the fetch steps, package assembly uses local inputs with Cargo's lockfile in offline mode. Copy the built `.deb` to another Ubuntu 24.04 amd64 PC to install it there. [Installation details](docs/INSTALL.md) cover offline requirements, permissions, services and removal.
 
-Connect the keypad, install the applications you want to launch, and open **MX Creative Control**. Close other controllers such as OpenLogi or Solaar before using it so they do not compete for the keypad.
+Connect the keypad, install the applications you want to launch, and open **MX Creative Control**. Select **MX Creative Console** on the device home screen, then choose the keypad. Close other controllers such as OpenLogi or Solaar before using it so they do not compete for the keypad.
 
 The app and worker run as your normal user. Installation or **Permissions → Set up device permissions** requires administrator authentication. `/dev/uinput` access also lets other programs running as that user create virtual input devices; the dialog explains this access. Permission repair uses the installed root-owned helper, never a script from a writable checkout.
 
 ## Configure the keypad
 
-1. Under **Customize**, select a key, choose an installed app or Screenshot, choose a shortcut profile, and press **Apply to key**.
+![MX Creative Console component view](docs/screenshots/console.png)
+
+![MX Creative Keypad editor](docs/screenshots/settings.png)
+
+Live console selection and keypad editor on the Ubuntu workstation.
+
+1. Select **MX Creative Console** on the home screen, then choose the keypad by clicking its image or sidebar item. Under **Keys**, select a key, choose an installed app or Screenshot, choose a shortcut profile, and press **Apply to key** in the right-hand inspector.
 2. Drag an Apps key onto another to insert it at that position and shift the other keys. Dropping onto a blank key appends it after the other apps. Reorders save and reload the keypad immediately; shortcut slots keep their assigned positions.
 3. Under **Applications**, use **Rescan** after installing an app. Assign a profile, import a JSON file, or edit shortcuts directly.
 4. On X11, press an app key to focus its existing window or launch it. With automatic switching enabled and a profile assigned, the keypad shows that app's shortcuts while it is active and returns to Apps when focus leaves. Apps without a profile stay on Apps. Arrow buttons and **Use preview on keypad** override automatic page choices; **Follow active app** restores automatic matching.
-5. Under **Settings → Appearance**, choose **System setting**, **Light**, or **Dark**. System setting follows desktop changes automatically. Settings also controls labels, sign-in startup and configuration export.
+5. Use the back controls to return to the console or all devices. The home-screen Settings button opens **Settings → Appearance**, where you can choose **System setting**, **Light**, or **Dark**. System setting follows desktop changes automatically. Settings also controls labels, sign-in startup and configuration export, and is available from the keypad editor.
+
+Device discovery reads USB/HID inventory and connected Bluetooth device metadata while the settings window is open. It does not pair devices or change their configuration. Refresh the home screen after connecting a device; it also refreshes periodically. If multiple supported keypads are connected, the editor asks you to leave one connected so configuration has a single target.
 
 First-run choices target ChatGPT, VS Code, Lark, Firefox, Warp and Screenshot. Available apps and Screenshot fill the Apps page without gaps, left-to-right and top-to-bottom. Configured apps that are missing on this PC remain in settings for portability but do not leave holes between visible keys. A browser shortcut/PWA must provide a desktop entry to appear in discovery. ChatGPT and Lark profiles contain conventional editing actions; app-specific bindings can be added in the editor.
 
@@ -102,7 +113,7 @@ Automated tests do not access hardware. They cover app discovery, profiles and i
 ## Current limits
 
 - Wayland supports app launching, virtual shortcut input and manual profiles; focusing existing windows and automatic app/page detection are not implemented. Use an X11 session for those features.
-- Only the MX Creative Keypad is supported. The dialpad is not managed by this application.
+- Only the MX Creative Keypad can be configured. Other detected Logitech devices, including the dialpad, have a details page only. Multiple connected keypads cannot be configured independently.
 - Applications must expose desktop entries to be discovered. Profiles assume default app shortcuts, which can vary by version, focused widget or user configuration.
 - Validation covers one Ubuntu 24.04 amd64 workstation and physical keypad. Other environments need testing before being treated as supported.
 
@@ -120,4 +131,4 @@ docs/              Installation, profiles, interface contract and validation
 
 ## License and attribution
 
-Project code is [MIT licensed](LICENSE). The reverse-engineered keypad protocol builds on OpenLogi and `node-logitech-mx-creative-console`; their notices and attribution are in [worker/THIRD_PARTY.md](worker/THIRD_PARTY.md). Qt and Shiboken retain their upstream licenses, documented in [packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md). Installed app icons and trademarks belong to their respective owners.
+Project code is [MIT licensed](LICENSE). The reverse-engineered keypad protocol builds on OpenLogi and `node-logitech-mx-creative-console`; their notices and attribution are in [worker/THIRD_PARTY.md](worker/THIRD_PARTY.md). Qt and Shiboken retain their upstream licenses, documented in [packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md). Installed app icons and trademarks belong to their respective owners. The device-first interface references are documented in [UI design references](docs/UI-REFERENCES.md); product illustrations are drawn locally in Qt.

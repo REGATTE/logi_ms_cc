@@ -19,6 +19,9 @@ required = {
     "./usr/lib/mx-creative-control/python/mxcc/__main__.py",
     "./usr/lib/mx-creative-control/python/mxcc/appearance.py",
     "./usr/lib/mx-creative-control/python/mxcc/key_button.py",
+    "./usr/lib/mx-creative-control/python/mxcc/devices.py",
+    "./usr/lib/mx-creative-control/python/mxcc/device_views.py",
+    "./usr/lib/mx-creative-control/python/mxcc/device_navigation.py",
     "./usr/lib/udev/rules.d/70-mx-creative-control.rules",
     "./usr/lib/systemd/user/mx-creative-control.service",
     "./usr/share/polkit-1/actions/org.mxcreativecontrol.setup-permissions.policy",
@@ -70,6 +73,8 @@ import mxcc
 from mxcc.gui import MainWindow
 from mxcc.configuration import default_settings
 from mxcc.applications import Application
+from mxcc.devices import Device
+from mxcc.device_views import CREATIVE_CONSOLE_ID
 from mxcc.key_button import LAUNCHER_MIME
 from mxcc.paths import profiles_dir, runtime_path, settings_path
 app = QApplication([])
@@ -87,6 +92,8 @@ assert image.save(sys.argv[2], 'JPEG')
 applications = [Application(f'{name}.desktop', name.title(), sys.argv[3], name,
                             name, Path(f'/unused/{name}.desktop'))
                 for name in ('alpha', 'beta', 'gamma')]
+inventory = [Device('test-keypad', 'MX Creative Keypad', 'keypad', 'USB', True, True, 0x046d, 0xc354),
+             Device('test-dialpad', 'MX Dialpad', 'dialpad', 'Bluetooth', True, False, 0x046d, 0xbc00)]
 profiles_dir().mkdir(parents=True, exist_ok=True)
 (profiles_dir() / 'alpha.json').write_text(json.dumps({
     'version': 1, 'id': 'alpha', 'name': 'Alpha shortcuts',
@@ -99,8 +106,39 @@ legacy['launchers'] = [None, 'alpha.desktop', 'missing.desktop', None,
 legacy.pop('theme', None)
 settings_path().parent.mkdir(parents=True, exist_ok=True)
 settings_path().write_text(json.dumps(legacy))
-window = MainWindow(connect_worker=False, applications=applications)
+window = MainWindow(connect_worker=False, applications=applications, devices=inventory)
 window.show()
+app.processEvents()
+assert window.views.currentWidget() is window.home
+assert set(window.home.cards) == {CREATIVE_CONSOLE_ID}
+assert window.device_scanner is None and not window.device_timer.isActive()
+window.home.settings_button.click()
+assert window.views.currentWidget() is window.settings_page
+window.settings_back.click()
+assert window.views.currentWidget() is window.home
+window.home.cards[CREATIVE_CONSOLE_ID].click()
+assert window.views.currentWidget() is window.console
+assert set(window.console.cards) == {device.id for device in inventory}
+window.console.settings_button.click()
+assert window.views.currentWidget() is window.settings_page
+window.settings_back.click()
+assert window.views.currentWidget() is window.console
+window.console.cards['test-dialpad'].click()
+assert window.views.currentWidget() is window.details
+assert window.details.title.text() == 'MX Dialpad'
+assert 'not available' in window.details.summary.text().lower()
+window.details.back_button.click()
+assert window.views.currentWidget() is window.console
+window.console.cards['test-keypad'].click()
+assert window.views.currentWidget() is window.editor
+assert window.navigation.currentItem().text() == 'Keys'
+window.back_button.click()
+assert window.views.currentWidget() is window.console
+window.console.back_button.click()
+assert window.views.currentWidget() is window.home
+window.home.cards[CREATIVE_CONSOLE_ID].click()
+window.console.cards['test-keypad'].click()
+assert window.views.currentWidget() is window.editor
 app.processEvents()
 assert not window.windowIcon().pixmap(64, 64).isNull()
 assert json.loads(settings_path().read_text())['theme'] == 'system'
@@ -178,14 +216,19 @@ assert saved['launchers'] == expected + ['missing.desktop'] + [None] * 4
 assert json.loads(runtime_path().read_text())['pages'][1] == shortcuts_before
 window.close()
 app.processEvents()
-window = MainWindow(connect_worker=False, applications=applications)
+window = MainWindow(connect_worker=False, applications=applications, devices=inventory)
 window.show()
 app.processEvents()
+assert window.views.currentWidget() is window.home
+window.home.cards[CREATIVE_CONSOLE_ID].click()
+assert window.views.currentWidget() is window.console
+window.console.cards['test-keypad'].click()
+assert window.views.currentWidget() is window.editor
 assert window.settings['launchers'] == saved['launchers']
 assert displayed_launchers() == expected + [None] * 5
 window.close()
 app.processEvents()
-print('Bundled settings, activation metadata, packed Apps/native reorder, themes and runtime smoke: OK')
+print('Bundled device navigation, settings, activation metadata, packed Apps/native reorder, themes and runtime smoke: OK')
 """
     icon = root / "usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg"
     subprocess.run(["/usr/bin/python3", "-I", "-c", smoke, str(private), str(root / "face.jpg"), str(icon)],

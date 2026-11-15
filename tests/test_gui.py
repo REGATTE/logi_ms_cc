@@ -10,7 +10,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -43,10 +43,12 @@ def isolated_qt(monkeypatch, tmp_path):
     monkeypatch.setattr(gui.ipc, "request", forbid_worker)
     monkeypatch.setattr(gui.service, "ensure_running", forbid_worker)
     monkeypatch.setattr(gui.service, "set_autostart", forbid_worker)
+    monkeypatch.setattr(gui, "discover_devices", lambda: [])
     yield _APP, warnings
     for widget in QApplication.topLevelWidgets():
         widget.close()
         widget.deleteLater()
+    _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     _APP.processEvents()
 
 
@@ -61,6 +63,32 @@ def installed_app(isolated_qt, tmp_path):
 
 def custom_profile(profile_id="editor"):
     return {"version": 1, "id": profile_id, "name": "Editor actions", "desktop_ids": ["editor.desktop"], "wm_classes": ["Editor"], "shortcuts": [{"slot": 1, "label": "Save", "keys": "Ctrl+S", "icon": "document-save"}]}
+
+
+def test_profile_strip_tracks_assignments_order_and_selects_hardware_profile(isolated_qt, installed_app, monkeypatch):
+    writer = replace(installed_app, id="writer.desktop", name="Writer", wm_class="Writer")
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app, writer])
+    window.profiles["editor"] = custom_profile()
+    window.profiles["writer"] = {**custom_profile("writer"), "desktop_ids": [writer.id], "wm_classes": ["Writer"]}
+    window.settings["launchers"] = [installed_app.id, writer.id] + [None] * 7
+    window.settings["profile_assignments"] = {installed_app.id: "editor", writer.id: "writer"}
+    window.persist()
+    window._populate_apps()
+    assert [profile for profile, _ in window.profile_chips] == [None, "editor", "writer"]
+    window.move_launcher(0, 1)
+    assert [profile for profile, _ in window.profile_chips] == [None, "writer", "editor"]
+    window.assign_profile(installed_app.id, None)
+    assert [profile for profile, _ in window.profile_chips] == [None, "writer"]
+
+    request = Mock(return_value={"ok": True})
+    monkeypatch.setattr(gui.ipc, "request", request)
+    window.connect_worker = True
+    window.profile_chips[1][1].click()
+    assert window.page == 1 and window.preview_profile.currentData() == "writer"
+    assert request.call_args_list == [call("profile", id="writer"), call("page", index=1)]
+    assert window.profile_chips[1][1].isChecked()
+    window.profile_chips[0][1].click()
+    assert window.page == 0 and window.profile_chips[0][1].isChecked()
 
 
 def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app):

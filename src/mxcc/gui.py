@@ -9,14 +9,17 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QMainWindow, QMessageBox, QPushButton, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__, ipc, service
 from .applications import discover_applications
 from .appearance import AppearanceController
 from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
+from .device_navigation import DeviceDetails, DeviceScanner
+from .device_views import CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
+from .devices import discover_devices
 from .icons import FaceRenderer, display_icon, setup_icon_theme
 from .key_button import KeyButton
 from .paths import cache_dir, profiles_dir, runtime_path
@@ -41,7 +44,7 @@ def button(text: str, callback, primary: bool = False) -> QPushButton:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, *, connect_worker: bool = True, applications=None):
+    def __init__(self, *, connect_worker: bool = True, applications=None, devices=None):
         super().__init__()
         setup_icon_theme()
         self.connect_worker = connect_worker
@@ -57,30 +60,63 @@ class MainWindow(QMainWindow):
         self.worker_error = None
         self.worker_sync_error = None
         self.permission_process = None
+        self.selected_device_id = None
+        self.devices = {}
+        self._editor_tab = 0
+        self._settings_return = "home"
         self.setWindowTitle("MX Creative Control")
-        self.resize(1110, 780)
+        self.resize(1200, 820)
         self.setMinimumSize(970, 710)
         root = QWidget()
         root.setObjectName("workspace")
         self.setCentralWidget(root)
-        outer = QHBoxLayout(root)
+        shell = QVBoxLayout(root)
+        shell.setContentsMargins(0, 0, 0, 0)
+        self.views = QStackedWidget()
+        shell.addWidget(self.views)
+        self.home = DevicesHome()
+        self.views.addWidget(self.home)
+        self.home.device_selected.connect(self.open_device)
+        self.home.refresh_requested.connect(self.refresh_devices)
+        self.home.settings_requested.connect(lambda: self.show_settings("home"))
+        self.console = ConsoleDevices()
+        self.views.addWidget(self.console)
+        self.console.back_requested.connect(self.show_home)
+        self.console.device_selected.connect(self.open_device)
+        self.console.settings_requested.connect(lambda: self.show_settings("console"))
+        self.editor = QWidget()
+        self.editor.setObjectName("editorPage")
+        self.views.addWidget(self.editor)
+        editor_layout = QVBoxLayout(self.editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(0)
+        header = QHBoxLayout()
+        header.setContentsMargins(24, 20, 28, 14)
+        header.setSpacing(12)
+        self.back_button = button("←", self._back_to_devices)
+        self.back_button.setObjectName("topbarButton")
+        self.back_button.setToolTip("MX Creative Console")
+        self.back_button.setAccessibleName("MX Creative Console")
+        header.addWidget(self.back_button)
+        self.device_title = label("MX Creative Keypad", "deviceTitle")
+        header.addWidget(self.device_title)
+        header.addStretch()
+        self.connection = label("Checking keypad…", "status")
+        header.addWidget(self.connection)
+        editor_layout.addLayout(header)
+        body = QWidget()
+        editor_layout.addWidget(body, 1)
+        outer = QHBoxLayout(body)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
-        self.navigation.setFixedWidth(185)
-        self.navigation.addItems(["Customize", "Applications", "Permissions", "Settings"])
+        self.navigation.setFixedWidth(158)
+        self.navigation.addItems(["Keys", "Applications", "Permissions", "Settings"])
         outer.addWidget(self.navigation)
         content = QVBoxLayout()
-        content.setContentsMargins(30, 25, 30, 20)
+        content.setContentsMargins(24, 8, 24, 20)
         outer.addLayout(content, 1)
-        heading = QHBoxLayout()
-        heading.addWidget(label("MX Creative Control", "title"))
-        heading.addStretch()
-        self.connection = label("Checking keypad…", "status")
-        heading.addWidget(self.connection)
-        content.addLayout(heading)
-        content.addWidget(label("Your apps. Your shortcuts.", "muted"))
         self.stack = QStackedWidget()
         content.addWidget(self.stack, 1)
         self._build_customize()
@@ -89,8 +125,11 @@ class MainWindow(QMainWindow):
         self._build_settings()
         self.notice = label("", "status", True)
         content.addWidget(self.notice)
-        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.navigation.currentRowChanged.connect(self._navigate_editor)
         self.navigation.setCurrentRow(0)
+        self.details = DeviceDetails()
+        self.details.back_requested.connect(self._back_to_devices)
+        self.views.addWidget(self.details)
         self._populate_apps()
         self.persist(notify=False)
         self.refresh_keys()
@@ -102,18 +141,136 @@ class MainWindow(QMainWindow):
             self.timer.start()
         else:
             self.connection.setText("Preview · worker not connected")
+        self.device_scanner = None
+        self.device_timer = QTimer(self)
+        self.device_timer.setInterval(5000)
+        self.device_timer.timeout.connect(self.refresh_devices)
+        if devices is not None:
+            self._devices_updated(devices)
+        elif connect_worker:
+            self.device_scanner = DeviceScanner(discover_devices, self)
+            self.device_scanner.updated.connect(self._devices_updated)
+            self.device_scanner.failed.connect(lambda error: self.home.set_error(f"Could not refresh devices: {error}"))
+            self.device_scanner.scanning.connect(self.home.set_scanning)
+            QTimer.singleShot(0, self.refresh_devices)
+            self.device_timer.start()
+        self.show_home()
+
+    def refresh_devices(self):
+        if self.device_scanner is not None:
+            self.device_scanner.refresh()
+
+    def _devices_updated(self, devices):
+        previous = self.devices.get(self.selected_device_id)
+        self.devices = {device.id: device for device in devices}
+        self.home.update_devices(self.devices.values())
+        self.console.update_devices(self.devices.values())
+        self.home.set_error("")
+        self.console.set_error("")
+        if previous is not None and self.selected_device_id not in self.devices:
+            if is_console_device(previous) and any(is_console_device(item) for item in self.devices.values()):
+                self.show_console()
+                self.console.set_error(f"{previous.name} disconnected. Reconnect it to continue.")
+            else:
+                self.show_home()
+                self.home.set_error(f"{previous.name} disconnected. Reconnect it to continue.")
+        elif self.selected_device_id in self.devices:
+            device = self.devices[self.selected_device_id]
+            if self.views.currentWidget() is self.editor and not self._can_customize(device):
+                self.open_device(device.id)
+            elif self.views.currentWidget() is self.details:
+                if self._can_customize(device):
+                    self.open_device(device.id)
+                else:
+                    self.details.show_device(device, multiple_keypads=self._multiple_keypads(device))
+        elif self.views.currentWidget() is self.console and not any(is_console_device(item) for item in self.devices.values()):
+            self.show_home()
+
+    def _multiple_keypads(self, device):
+        return device.supported and sum(item.supported and item.connected is True for item in self.devices.values()) > 1
+
+    def _can_customize(self, device):
+        return device.supported and device.connected is True and not self._multiple_keypads(device)
+
+    def open_device(self, device_id):
+        if device_id == CREATIVE_CONSOLE_ID:
+            self.show_console()
+            return
+        device = self.devices.get(device_id)
+        if device is None:
+            return
+        self.selected_device_id = device_id
+        if self._can_customize(device):
+            self.device_title.setText(device.name)
+            self.views.setCurrentWidget(self.editor)
+            self.navigation.setCurrentRow(0)
+        else:
+            self.details.show_device(device, multiple_keypads=self._multiple_keypads(device))
+            parent_title = "MX Creative Console" if is_console_device(device) else "All devices"
+            self.details.back_button.setToolTip(parent_title)
+            self.details.back_button.setAccessibleName(parent_title)
+            self.views.setCurrentWidget(self.details)
+
+    def show_home(self):
+        self.selected_device_id = None
+        self.views.setCurrentWidget(self.home)
+        self.home.setFocus()
+
+    def show_console(self):
+        if not any(is_console_device(device) for device in self.devices.values()):
+            self.show_home()
+            return
+        self.selected_device_id = None
+        self.views.setCurrentWidget(self.console)
+        self.console.setFocus()
+
+    def _back_to_devices(self):
+        device = self.devices.get(self.selected_device_id)
+        if device is not None and is_console_device(device):
+            self.show_console()
+        else:
+            self.show_home()
+
+    def _navigate_editor(self, index):
+        if index == 3:
+            self.show_settings("editor")
+            self.navigation.blockSignals(True)
+            self.navigation.setCurrentRow(self._editor_tab)
+            self.navigation.blockSignals(False)
+        elif index >= 0:
+            self._editor_tab = index
+            self.stack.setCurrentIndex(index)
+
+    def show_settings(self, return_to="home"):
+        self._settings_return = return_to
+        self.views.setCurrentWidget(self.settings_page)
+
+    def _leave_settings(self):
+        if self._settings_return == "console":
+            self.show_console()
+            return
+        if self._settings_return == "editor" and self.selected_device_id in self.devices:
+            device = self.devices[self.selected_device_id]
+            if self._can_customize(device):
+                self.views.setCurrentWidget(self.editor)
+                return
+        self.show_home()
 
     def _build_customize(self):
         widget = QWidget()
+        widget.setObjectName("editorStage")
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 24, 0, 0)
+        layout.setContentsMargins(0, 16, 0, 0)
         row = QHBoxLayout()
-        row.addWidget(label("Keypad layout", "section"))
+        self.profile_strip = QHBoxLayout()
+        self.profile_strip.setSpacing(8)
+        self.profile_chips = []
+        row.addLayout(self.profile_strip)
         row.addStretch()
         self.preview_profile = QComboBox()
         self.preview_profile.setMinimumWidth(190)
         self.preview_profile.currentIndexChanged.connect(self.refresh_keys)
-        row.addWidget(label("Shortcut preview", "muted"))
+        row.addWidget(label("Profile", "muted"))
         row.addWidget(self.preview_profile)
         layout.addLayout(row)
         profile_actions = QHBoxLayout()
@@ -128,6 +285,7 @@ class MainWindow(QMainWindow):
         device_column.addStretch()
         self.device = QFrame()
         self.device.setObjectName("device")
+        self.device.setFixedSize(396, 396)
         grid = QGridLayout(self.device)
         grid.setContentsMargins(18, 18, 18, 18)
         grid.setSpacing(8)
@@ -154,14 +312,14 @@ class MainWindow(QMainWindow):
             pages.addWidget(control)
         pages.addStretch()
         device_column.addLayout(pages)
-        self.reorder_hint = label("Drag app icons to reorder. Changes save automatically.", "muted", True)
+        self.reorder_hint = label("Drag icons to reorder. Changes save automatically.", "muted", True)
+        self.reorder_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         device_column.addWidget(self.reorder_hint)
-        device_column.addWidget(label("Use the keypad’s arrow buttons to change pages.", "muted", True))
         device_column.addStretch()
-        body.addLayout(device_column)
+        body.addLayout(device_column, 1)
         inspector = QFrame()
-        inspector.setObjectName("card")
-        inspector.setMinimumWidth(270)
+        inspector.setObjectName("actionInspector")
+        inspector.setFixedWidth(320)
         side = QVBoxLayout(inspector)
         side.setContentsMargins(20, 22, 20, 22)
         self.key_title = label("Key 1", "section")
@@ -185,7 +343,7 @@ class MainWindow(QMainWindow):
         side.addStretch()
         self.active_label = label("Active application: —", "muted", True)
         side.addWidget(self.active_label)
-        body.addWidget(inspector, 1)
+        body.addWidget(inspector)
         self.stack.addWidget(widget)
 
     def _build_applications(self):
@@ -239,9 +397,25 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(widget)
 
     def _build_settings(self):
+        self.settings_page = QWidget()
+        self.settings_page.setObjectName("settingsPage")
+        outer = QVBoxLayout(self.settings_page)
+        outer.setContentsMargins(32, 24, 32, 28)
+        header = QHBoxLayout()
+        self.settings_back = button("←", self._leave_settings)
+        self.settings_back.setObjectName("topbarButton")
+        self.settings_back.setAccessibleName("Back from settings")
+        header.addWidget(self.settings_back)
+        header.addWidget(label("Settings", "deviceTitle"))
+        header.addStretch()
+        outer.addLayout(header)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll, 1)
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 24, 0, 0)
+        layout.setContentsMargins(22, 24, 22, 0)
         layout.addWidget(label("Appearance", "section"))
         self.theme_combo = QComboBox()
         self.theme_combo.setAccessibleName("Appearance")
@@ -280,7 +454,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(label(f"Shortcut profiles\n{profiles_dir()}", "muted", True))
         layout.addWidget(label(f"MX Creative Control {__version__} · Independent Linux application", "muted"))
         layout.addStretch()
-        self.stack.addWidget(widget)
+        scroll.setWidget(widget)
+        self.views.addWidget(self.settings_page)
 
     def _populate_apps(self):
         previous = self.preview_profile.currentData()
@@ -317,6 +492,52 @@ class MainWindow(QMainWindow):
             self.app_table.setRowHeight(row, 49)
         self.filter_apps(self.search.text())
         self.select_key(self.selected_slot)
+        self._populate_profile_strip()
+
+    def _populate_profile_strip(self):
+        while self.profile_strip.count():
+            item = self.profile_strip.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.profile_chips = []
+
+        def chip(title, icon, profile_id):
+            control = QToolButton()
+            control.setObjectName("profileChip")
+            control.setFixedSize(38, 38)
+            control.setIconSize(QSize(24, 24))
+            control.setCheckable(True)
+            control.setToolTip(title)
+            control.setAccessibleName(title)
+            if icon is not None:
+                control.setIcon(icon)
+            else:
+                control.setText("▦")
+            control.clicked.connect(lambda checked=False, p=profile_id: self._select_profile_chip(p))
+            self.profile_strip.addWidget(control)
+            self.profile_chips.append((profile_id, control))
+
+        chip("All applications · launcher", None, None)
+        indexed = {app.id: app for app in self.apps}
+        added = set()
+        for app_id in self.settings["launchers"]:
+            app = indexed.get(app_id)
+            profile = profile_for_app(app, self.profiles, self.settings["profile_assignments"]) if app else None
+            if profile and profile["id"] not in added:
+                chip(f"{app.name} · shortcuts", display_icon(app.icon, application=True), profile["id"])
+                added.add(profile["id"])
+        self._refresh_profile_strip()
+
+    def _select_profile_chip(self, profile_id):
+        if profile_id is None:
+            self.change_page(0)
+        else:
+            self.preview_profile.setCurrentIndex(self.preview_profile.findData(profile_id))
+            self.use_preview_profile()
+
+    def _refresh_profile_strip(self):
+        for profile_id, control in self.profile_chips:
+            control.setChecked(profile_id is None if self.page == 0 else profile_id == self.preview_profile.currentData())
 
     def fill_profile_combo(self, combo, app_id):
         combo.blockSignals(True)
@@ -414,6 +635,7 @@ class MainWindow(QMainWindow):
         self.reorder_hint.setVisible(self.page == 0)
         for index, control in enumerate(self.page_buttons):
             control.setChecked(index == self.page)
+        self._refresh_profile_strip()
 
     def persist(self, *, notify=True, settings=None):
         candidate = self.settings if settings is None else settings
@@ -481,6 +703,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not save order", str(exc))
             return
         self.select_key(destination)
+        self._populate_profile_strip()
 
     def _set_assignment(self, app_id, profile_id, *, settings=None):
         settings = self.settings if settings is None else settings
@@ -493,6 +716,7 @@ class MainWindow(QMainWindow):
         self._set_assignment(app_id, profile_id)
         self.safe_save()
         self._refresh_assignment()
+        self._populate_profile_strip()
 
     def safe_save(self):
         try:
@@ -646,7 +870,14 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+        self.show_home()
+        self.refresh_devices()
         self.start_worker()
+
+    def closeEvent(self, event):
+        self.device_timer.stop()
+        self.timer.stop()
+        super().closeEvent(event)
 
     def _worker_failed(self, error):
         self.status = {}

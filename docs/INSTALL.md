@@ -1,8 +1,8 @@
 # Install on Ubuntu
 
 The initial package targets Ubuntu 24.04 with its system Python 3.12, on the
-architecture used to build it. It controls the USB MX Creative **Keypad**; the
-wireless dialpad is outside this application's scope. This is an independent
+architecture used to build it. It controls the USB MX Creative **Keypad**; other
+connected Logitech devices have a read-only details page. This is an independent
 community application, not Logitech's Logi Options+ software.
 
 ## Install a built package
@@ -10,7 +10,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.1.4_amd64.deb
+sudo apt install ./mx-creative-control_0.1.5_amd64.deb
 mx-creative-control
 ```
 
@@ -25,12 +25,26 @@ For a completely offline PC, those Ubuntu dependencies must already be present.
 An arm64 machine requires an arm64 build.
 
 Connect the keypad over USB. Open **MX Creative Control** from Ubuntu's app
-launcher, select a tile under **Customize**, choose an installed app, then press
-**Apply to key**. App images come from their original desktop icons.
+launcher and select **MX Creative Console** on the device home screen. Choose
+the keypad by clicking its image or sidebar item. Under **Keys**, select a key,
+choose an installed app, then press **Apply to key** in
+the right-hand inspector. App images come from their original desktop icons.
 Artwork fills each key with a narrow black border and no added white tile.
 Re-scan after installing an additional
 app; the app must provide a desktop entry to appear in the list. A ChatGPT browser
 shortcut or PWA appears if the browser creates a desktop entry for it.
+
+The home screen lists connected Logitech USB/HID and Bluetooth devices, grouping
+the keypad and dialpad under **MX Creative Console**. Its
+Refresh button updates the inventory; it also refreshes while the window is
+open. Open the Console card to see its components side by side and select the
+keypad or dialpad by its image or sidebar item. The dialpad and other devices
+open connection details only.
+No Bluetooth pairing or configuration of other devices is performed.
+Connect just one supported keypad to use the editor; multiple keypads are
+shown individually, but their configuration cannot be targeted independently.
+Back controls return to the console or all devices. The home-screen Settings button opens
+global settings, which are also accessible from the editor.
 
 The Apps page packs available apps and Screenshot left-to-right, top-to-bottom,
 with empty keys only at the end. Missing configured apps remain in settings for
@@ -55,7 +69,7 @@ from the application launcher even if the desktop hides the tray.
 
 The panel icon matches the application's mint nine-key icon. Source checkouts
 resolve the SVG directly, so installing it into a global icon theme is not
-required. **Settings → Appearance → Theme** offers System setting (default),
+required. The home-screen Settings button opens **Settings → Appearance → Theme**, with System setting (default),
 Light and Dark. System setting follows desktop appearance changes while the
 window is open; explicit choices persist across restarts.
 
@@ -139,7 +153,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.4_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.5_amd64.deb
 python3 scripts/source-archive.py
 ```
 

@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
@@ -56,6 +56,7 @@ def isolated_theme(monkeypatch, tmp_path):
     for widget in _APP.topLevelWidgets():
         widget.close()
         widget.deleteLater()
+    _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     _APP.processEvents()
     _APP.setStyleSheet(old_style)
     _APP.setPalette(old_palette)
