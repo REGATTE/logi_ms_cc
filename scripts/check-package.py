@@ -18,6 +18,7 @@ required = {
     "./usr/lib/mx-creative-control/setup-permissions",
     "./usr/lib/mx-creative-control/python/mxcc/__main__.py",
     "./usr/lib/mx-creative-control/python/mxcc/appearance.py",
+    "./usr/lib/mx-creative-control/python/mxcc/application_views.py",
     "./usr/lib/mx-creative-control/python/mxcc/key_button.py",
     "./usr/lib/mx-creative-control/python/mxcc/devices.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_views.py",
@@ -93,7 +94,7 @@ applications = [Application(f'{name}.desktop', name.title(), sys.argv[3], name,
                             name, Path(f'/unused/{name}.desktop'))
                 for name in ('alpha', 'beta', 'gamma')]
 inventory = [Device('test-keypad', 'MX Creative Keypad', 'keypad', 'USB', True, True, 0x046d, 0xc354),
-             Device('test-dialpad', 'MX Dialpad', 'dialpad', 'Bluetooth', True, False, 0x046d, 0xbc00)]
+             Device('test-dialpad', 'MX Dialpad', 'dialpad', 'Bluetooth', True, False, 0x046d, 0xbc00, battery_percent=81)]
 profiles_dir().mkdir(parents=True, exist_ok=True)
 (profiles_dir() / 'alpha.json').write_text(json.dumps({
     'version': 1, 'id': 'alpha', 'name': 'Alpha shortcuts',
@@ -111,15 +112,17 @@ window.show()
 app.processEvents()
 assert window.views.currentWidget() is window.home
 assert set(window.home.cards) == {CREATIVE_CONSOLE_ID}
+assert window.home.cards[CREATIVE_CONSOLE_ID].indicators['test-dialpad'].battery_text == '81%'
 assert window.device_scanner is None and not window.device_timer.isActive()
-window.home.settings_button.click()
+window.footer.settings_button.click()
 assert window.views.currentWidget() is window.settings_page
 window.settings_back.click()
 assert window.views.currentWidget() is window.home
 window.home.cards[CREATIVE_CONSOLE_ID].click()
 assert window.views.currentWidget() is window.console
 assert set(window.console.cards) == {device.id for device in inventory}
-window.console.settings_button.click()
+assert window.console.cards['test-dialpad'].indicators['test-dialpad'].battery_text == '81%'
+window.footer.settings_button.click()
 assert window.views.currentWidget() is window.settings_page
 window.settings_back.click()
 assert window.views.currentWidget() is window.console
@@ -132,6 +135,17 @@ assert window.views.currentWidget() is window.console
 window.console.cards['test-keypad'].click()
 assert window.views.currentWidget() is window.editor
 assert window.navigation.currentItem().text() == 'Keys'
+window.navigation.setCurrentRow(1)
+app.processEvents()
+assert list(window.application_cards) == ['alpha.desktop', 'beta.desktop', 'gamma.desktop', '@screenshot']
+assert window.application_cards['alpha.desktop'].profile_summary.text() == '1 shortcut'
+assert window.application_cards['beta.desktop'].edit_button.text() == 'Set up'
+assert window.application_cards['@screenshot'].profile_combo is None
+window.search.setText('beta')
+assert not window.application_cards['beta.desktop'].isHidden()
+assert window.application_cards['alpha.desktop'].isHidden()
+window.search.clear()
+window.navigation.setCurrentRow(0)
 window.back_button.click()
 assert window.views.currentWidget() is window.console
 window.console.back_button.click()
@@ -228,7 +242,7 @@ assert window.settings['launchers'] == saved['launchers']
 assert displayed_launchers() == expected + [None] * 5
 window.close()
 app.processEvents()
-print('Bundled device navigation, settings, activation metadata, packed Apps/native reorder, themes and runtime smoke: OK')
+print('Bundled device navigation, battery indicators, application cards, settings, activation metadata, packed Apps/native reorder, themes and runtime smoke: OK')
 """
     icon = root / "usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg"
     subprocess.run(["/usr/bin/python3", "-I", "-c", smoke, str(private), str(root / "face.jpg"), str(icon)],

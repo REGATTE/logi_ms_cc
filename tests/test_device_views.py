@@ -12,7 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from mxcc.devices import Device
-from mxcc.device_views import CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome
+from mxcc.device_views import AppFooter, CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome
 
 _APP = None
 
@@ -35,6 +35,19 @@ def overview(qt_app):
     home.deleteLater()
     _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     _APP.processEvents()
+
+
+@pytest.fixture
+def footer(qt_app):
+    actions = AppFooter()
+    actions.resize(970, 64)
+    actions.show()
+    qt_app.processEvents()
+    yield actions
+    actions.close()
+    actions.deleteLater()
+    qt_app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qt_app.processEvents()
 
 
 @pytest.fixture
@@ -73,10 +86,17 @@ def test_console_members_share_one_home_card_and_other_devices_remain_separate(o
 
 def test_connected_unknown_and_battery_are_not_invented(overview):
     overview.update_devices([device(), device("receiver-mouse", kind="mouse", connected=None),
-                             device("dialpad", kind="dialpad", battery=0)])
+                             device("dialpad", kind="dialpad", battery=0),
+                             device("keyboard", kind="keyboard", connected=False)])
     group = overview.cards[CREATIVE_CONSOLE_ID]
-    assert group.connection_label.text() == "Keypad · Connected\nDialpad · Connected"
-    assert overview.cards["receiver-mouse"].connection_label.text() == "Connection unknown · USB"
+    assert group.indicators["keypad"].state == "connected"
+    assert group.indicators["keypad"].battery_text == ""
+    assert group.indicators["dialpad"].state == "connected"
+    assert group.indicators["dialpad"].battery_text == "0%"
+    assert overview.cards["receiver-mouse"].indicators["receiver-mouse"].state == "unknown"
+    assert overview.cards["receiver-mouse"].indicators["receiver-mouse"].battery_text == ""
+    assert overview.cards["keyboard"].indicators["keyboard"].state == "disconnected"
+    assert "Connection unknown · USB" in overview.cards["receiver-mouse"].toolTip()
     assert "Dialpad · Connected · Bluetooth · 0% battery" in group.toolTip()
 
 
@@ -89,31 +109,46 @@ def test_rescan_preserves_existing_card_focus_and_removes_disconnected_devices(o
     assert overview.cards[CREATIVE_CONSOLE_ID] is card
     assert card.hasFocus()
     assert "89% battery" in card.toolTip()
+    assert card.indicators["dialpad"].battery_text == "89%"
+    overview.update_devices([keypad, replace(dialpad, battery_percent=None)])
+    assert card.indicators["dialpad"].battery_text == ""
     overview.update_devices([keypad])
     assert set(overview.cards) == {CREATIVE_CONSOLE_ID}
-    assert "Dialpad" not in card.connection_label.text()
-    assert "battery" not in card.connection_label.text()
+    assert set(card.indicators) == {"keypad"}
+    assert "battery" not in card.toolTip()
     assert card.hasFocus()
     overview.update_devices([])
     assert overview.empty_state.isVisible()
     assert not overview.scroll.isVisible()
 
 
-def test_home_actions_and_scan_failure_keep_existing_devices_usable(overview):
+def test_shared_footer_actions_and_busy_refresh(footer):
     refreshes, settings = [], []
-    overview.refresh_requested.connect(lambda: refreshes.append(True))
-    overview.settings_requested.connect(lambda: settings.append(True))
-    QTest.mouseClick(overview.refresh_button, Qt.MouseButton.LeftButton)
-    QTest.mouseClick(overview.settings_button, Qt.MouseButton.LeftButton)
+    footer.refresh_requested.connect(lambda: refreshes.append(True))
+    footer.settings_requested.connect(lambda: settings.append(True))
+    QTest.mouseClick(footer.refresh_button, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(footer.settings_button, Qt.MouseButton.LeftButton)
     assert refreshes == settings == [True]
+    footer.set_scanning(True)
+    assert not footer.refresh_button.isEnabled()
+    QTest.mouseClick(footer.refresh_button, Qt.MouseButton.LeftButton)
+    assert refreshes == [True]
+    assert "Refreshing" in footer.refresh_button.accessibleName()
+    footer.settings_button.setFocus()
+    QTest.keyClick(footer.settings_button, Qt.Key.Key_Return)
+    assert settings == [True, True]
+    footer.set_scanning(False)
+    assert footer.refresh_button.isEnabled()
+    assert not footer.refresh_button.text()
+
+
+def test_home_scan_failure_keeps_existing_devices_usable(overview):
     overview.update_devices([device()])
     overview.set_scanning(True)
-    assert not overview.refresh_button.isEnabled()
     assert overview.cards[CREATIVE_CONSOLE_ID].isEnabled()
     overview.set_error("Bluetooth status is unavailable.")
     overview.set_scanning(False)
     assert overview.notice.isVisible()
-    assert overview.refresh_button.isEnabled()
     overview.set_error("")
     assert not overview.notice.isVisible()
 
@@ -138,22 +173,21 @@ def test_console_shows_real_members_side_by_side_without_automatically_selecting
     QApplication.processEvents()
     assert not selected
     assert set(console.cards) == {"keypad", "dialpad"}
-    assert console.navigation.count() == 2
-    assert console.navigation.currentRow() == -1
     assert console.gallery.columns == 2
     assert console.cards["keypad"].y() == console.cards["dialpad"].y()
     assert console.cards["keypad"].x() < console.cards["dialpad"].x()
     assert console.scroll.horizontalScrollBar().maximum() == 0
     assert not console.missing_notice.isVisible()
-    assert console.cards["dialpad"].connection_label.text() == "Connected · Bluetooth · 73% battery"
+    assert console.cards["dialpad"].indicators["dialpad"].state == "connected"
+    assert console.cards["dialpad"].indicators["dialpad"].battery_text == "73%"
+    assert console.cards["keypad"].indicators["keypad"].battery_text == ""
+    assert "Connected · Bluetooth · 73% battery" in console.cards["dialpad"].toolTip()
     assert console.cards["dialpad"].support_label.text() == "Device details"
 
     QTest.mouseClick(console.cards["keypad"], Qt.MouseButton.LeftButton)
-    dialpad_item = console.navigation.item(1)
-    QTest.mouseClick(console.navigation.viewport(), Qt.MouseButton.LeftButton,
-                     pos=console.navigation.visualItemRect(dialpad_item).center())
-    console.navigation.setCurrentRow(0)
-    QTest.keyClick(console.navigation, Qt.Key.Key_Return)
+    QTest.mouseClick(console.cards["dialpad"], Qt.MouseButton.LeftButton)
+    console.cards["keypad"].setFocus()
+    QTest.keyClick(console.cards["keypad"], Qt.Key.Key_Return)
     assert selected == ["keypad", "dialpad", "keypad"]
 
 
@@ -167,10 +201,12 @@ def test_console_updates_keep_focused_cards_and_never_invent_a_missing_counterpa
     console.update_devices([keypad, replace(dialpad, battery_percent=89)])
     assert console.cards["keypad"] is card
     assert card.hasFocus()
-    assert "89% battery" in console.cards["dialpad"].connection_label.text()
+    assert "89% battery" in console.cards["dialpad"].toolTip()
+    assert console.cards["dialpad"].indicators["dialpad"].battery_text == "89%"
+    console.update_devices([keypad, replace(dialpad, battery_percent=None)])
+    assert console.cards["dialpad"].indicators["dialpad"].battery_text == ""
     console.update_devices([keypad])
     assert set(console.cards) == {"keypad"}
-    assert console.navigation.count() == 1
     assert "No dialpad detected" in console.missing_notice.text()
     assert not selected
     console.update_devices([dialpad])
@@ -178,24 +214,56 @@ def test_console_updates_keep_focused_cards_and_never_invent_a_missing_counterpa
     assert "No keypad detected" in console.missing_notice.text()
     console.update_devices([])
     assert not console.cards
-    assert console.navigation.count() == 0
     assert "No MX Creative Console devices detected" in console.missing_notice.text()
 
 
 def test_console_actions_and_multiple_keypads_preserve_real_ids(console):
-    selected, back, settings = [], [], []
+    selected, back = [], []
     console.device_selected.connect(selected.append)
     console.back_requested.connect(lambda: back.append(True))
-    console.settings_requested.connect(lambda: settings.append(True))
     console.update_devices([device(), device("second-keypad"), device("dialpad", kind="dialpad", connected=None)])
     QTest.mouseClick(console.cards["second-keypad"], Qt.MouseButton.LeftButton)
     assert selected == ["second-keypad"]
-    assert "Connection unknown" in console.cards["dialpad"].connection_label.text()
+    assert console.cards["dialpad"].indicators["dialpad"].state == "unknown"
     QTest.mouseClick(console.back_button, Qt.MouseButton.LeftButton)
-    QTest.mouseClick(console.settings_button, Qt.MouseButton.LeftButton)
-    assert back == settings == [True]
+    assert back == [True]
     console.set_error("Keypad disconnected.")
     assert console.notice.isVisible()
     assert console.cards["dialpad"].isEnabled()
     console.set_error("")
     assert not console.notice.isVisible()
+
+
+def test_search_indicators_blink_only_while_searching_and_visible(overview):
+    overview.update_devices([device(), device("dialpad", kind="dialpad", connected=False)])
+    QApplication.processEvents()
+    group = overview.cards[CREATIVE_CONSOLE_ID]
+    connected = group.indicators["keypad"]
+    missing = group.indicators["dialpad"]
+    overview.set_scanning(True)
+    assert connected.state == "connected" and not connected.timer.isActive()
+    assert missing.state == "searching" and missing.timer.isActive()
+    before = missing.blink_on
+    QTest.qWait(550)
+    assert missing.blink_on != before
+    overview.hide()
+    assert not missing.timer.isActive()
+    overview.show()
+    assert missing.timer.isActive()
+    overview.set_scanning(False)
+    assert missing.state == "disconnected" and not missing.timer.isActive()
+    overview.set_scanning(True, force=True)
+    assert connected.state == "searching" and connected.timer.isActive()
+    overview.set_scanning(False)
+    assert connected.state == "connected" and not connected.timer.isActive()
+
+
+def test_console_search_updates_new_cards_and_keeps_individual_dots(console):
+    console.set_scanning(True)
+    console.update_devices([device(), device("dialpad", kind="dialpad", connected=None)])
+    QApplication.processEvents()
+    dialpad = console.cards["dialpad"].indicators["dialpad"]
+    assert dialpad.state == "searching" and dialpad.timer.isActive()
+    assert console.cards["keypad"].indicators["keypad"].state == "connected"
+    console.set_scanning(False)
+    assert dialpad.state == "unknown" and not dialpad.timer.isActive()

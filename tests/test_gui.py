@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QMessageBox
 
 from mxcc import gui, paths
 from mxcc.applications import Application
@@ -84,7 +84,7 @@ def test_profile_strip_tracks_assignments_order_and_selects_hardware_profile(iso
     monkeypatch.setattr(gui.ipc, "request", request)
     window.connect_worker = True
     window.profile_chips[1][1].click()
-    assert window.page == 1 and window.preview_profile.currentData() == "writer"
+    assert window.page == 1 and window.preview_profile_id == "writer"
     assert request.call_args_list == [call("profile", id="writer"), call("page", index=1)]
     assert window.profile_chips[1][1].isChecked()
     window.profile_chips[0][1].click()
@@ -115,6 +115,70 @@ def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app
     assert not window.timer.isActive()
 
 
+def test_assigned_applications_follow_keypad_order_and_preserve_shortcuts(isolated_qt, installed_app):
+    writer = replace(installed_app, id="writer.desktop", name="Writer")
+    unused = replace(installed_app, id="unused.desktop", name="Unused")
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app, writer, unused])
+    window.profiles["editor"] = custom_profile()
+    window.settings["launchers"] = [writer.id, "@screenshot", installed_app.id, writer.id, "missing.desktop"] + [None] * 4
+    window.settings["profile_assignments"][installed_app.id] = "editor"
+    window.persist()
+    window._populate_apps()
+    assert list(window.application_cards) == [writer.id, "@screenshot", installed_app.id]
+    assert window.application_cards[writer.id].name_label.text() == "Writer"
+    screenshot = window.application_cards["@screenshot"]
+    assert screenshot.profile_combo is screenshot.import_button is screenshot.edit_button is None
+    assert window.app_combo.findData(unused.id) >= 0
+    window.search.setText("Editor")
+    assert [card.isHidden() for card in window.application_cards.values()] == [True, True, False]
+    window.search.clear()
+    window.move_launcher(2, 0)
+    assert list(window.application_cards) == [installed_app.id, writer.id, "@screenshot"]
+    window.select_key(0)
+    window.apply_key()
+    assert window.settings["profile_assignments"][installed_app.id] == "editor"
+    window.app_combo.setCurrentIndex(window.app_combo.findData(None))
+    window.apply_key()
+    assert list(window.application_cards) == [writer.id, "@screenshot"]
+    assert window.stack.widget(0).findChildren(QComboBox) == [window.app_combo]
+
+
+def test_application_cards_route_actions_and_distinguish_search_from_empty_layout(isolated_qt, installed_app, monkeypatch):
+    imported, edited = [], []
+    monkeypatch.setattr(gui.MainWindow, "import_shortcuts", lambda self, checked=False, *, application=None: imported.append(application))
+    monkeypatch.setattr(gui.MainWindow, "edit_shortcuts", lambda self, checked=False, *, application=None: edited.append(application))
+    writer = replace(installed_app, id="writer.desktop", name="Writer")
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app, writer])
+    window.settings["launchers"] = [installed_app.id, writer.id] + [None] * 7
+    window.persist()
+    window._populate_apps()
+    window.application_cards[writer.id].import_button.click()
+    window.application_cards[installed_app.id].edit_button.click()
+    assert imported == [writer]
+    assert edited == [installed_app]
+    assert window.applications_empty.isHidden()
+
+    window.search.setText("WRITER.DESKTOP")
+    assert window.application_cards[installed_app.id].isHidden()
+    assert not window.application_cards[writer.id].isHidden()
+    window.search.setText("No matching installed application")
+    assert all(card.isHidden() for card in window.application_cards.values())
+    assert not window.applications_empty.isHidden()
+    search_message = window.applications_empty_title.text()
+    assert search_message
+    window.search.clear()
+    assert window.applications_empty.isHidden()
+    assert all(not card.isHidden() for card in window.application_cards.values())
+
+    window.settings["launchers"] = [None] * 9
+    window.persist()
+    window._populate_apps()
+    assert not window.application_cards
+    assert not window.applications_empty.isHidden()
+    assert window.applications_empty_title.text()
+    assert window.applications_empty_title.text() != search_message
+
+
 def test_renderer_caches_original_artwork_and_label_preference(isolated_qt, installed_app):
     with_labels = FaceRenderer(True)
     first = with_labels("Editor", "unavailable-icon", installed_app)
@@ -137,15 +201,20 @@ def test_shortcut_import_assigns_profile_and_can_disable_it(isolated_qt, install
     source.write_text(json.dumps(custom_profile()))
     monkeypatch.setattr(gui.QFileDialog, "getOpenFileName", lambda *_: (str(source), ""))
     window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.app_combo.setCurrentIndex(window.app_combo.findData(installed_app.id))
+    window.apply_key()
     window.import_shortcuts(application=installed_app)
     assert not warnings
     assert window.settings["profile_assignments"][installed_app.id] == "editor"
-    assert window.app_table.cellWidget(0, 1).currentData() == "editor"
+    assert window.application_cards[installed_app.id].profile_combo.currentData() == "editor"
     assert window.runtime["profiles"][0]["page"]["keys"][0]["action"] == {"type": "shortcut", "keys": "Ctrl+S"}
-    combo = window.app_table.cellWidget(0, 1)
+    combo = window.application_cards[installed_app.id].profile_combo
     combo.setCurrentIndex(combo.findData(None))
     assert window.settings["profile_assignments"][installed_app.id] is None
     assert window.runtime["profiles"] == []
+    combo.setCurrentIndex(combo.findData("__auto__"))
+    assert installed_app.id not in window.settings["profile_assignments"]
+    assert window.runtime["profiles"][0]["page"]["keys"][0]["action"] == {"type": "shortcut", "keys": "Ctrl+S"}
 
 
 def test_existing_profile_import_requires_confirmed_replacement(isolated_qt, installed_app, monkeypatch, tmp_path):
@@ -191,7 +260,7 @@ def test_editing_preview_uses_its_profile_without_reassigning_launcher(isolated_
     window = gui.MainWindow(connect_worker=False, applications=[chatgpt, code])
     assert window.selected_app().id == "chatgpt.desktop"
     window.change_page(1)
-    window.preview_profile.setCurrentIndex(window.preview_profile.findData(preview_id))
+    window.preview_profile_id = preview_id
     captured = []
     def edit_and_save(editor):
         captured.append((editor.application.id if editor.application else None, editor.profile["id"]))
@@ -229,6 +298,9 @@ def test_window_export_import_restores_layout_but_keeps_local_startup_preference
 
 def test_permission_dialog_requires_consent_and_launches_only_fixed_helper(isolated_qt, installed_app, monkeypatch):
     window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.show_settings()
+    assert [window.navigation.item(row).text() for row in range(window.navigation.count())] == ["Keys", "Applications"]
+    assert window.settings_page.isAncestorOf(window.repair_button)
     helper = Path("/usr/lib/mx-creative-control/setup-permissions")
     real_is_file = Path.is_file
     monkeypatch.setattr(Path, "is_file", lambda path: True if path == helper else real_is_file(path))
@@ -254,6 +326,7 @@ def test_permission_dialog_requires_consent_and_launches_only_fixed_helper(isola
     finished_callback(126, 0)
     assert window.repair_button.isEnabled()
     assert "cancelled" in window.notice.text()
+    assert "cancelled" in window.permissions_notice.text()
 
 
 def connected_status():

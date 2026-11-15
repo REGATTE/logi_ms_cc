@@ -6,13 +6,27 @@ IPC and the tray. The PySide6 settings process exits when its window closes.
 
 The initial Qt view is a Logitech-only device home screen. The keypad and dialpad
 appear under one MX Creative Console card, which opens a side-by-side component
-view with clickable component images and a sidebar selector. Selecting one
-connected supported keypad opens its Keys editor, with
-app/profile choices above the key preview and the selected-key inspector on the
-right. Back controls return to the console and home; the home Settings button
-opens global settings. The dialpad and other devices open a read-only details
+view with clickable component images. Selecting one
+connected supported keypad opens its Keys editor, with app icons above the key
+preview and a rounded inspector on the right. The inspector has no key-number
+heading or profile dropdown. Its application picker includes all installed apps
+and Screenshot; Apply preserves the app's existing shortcut assignment. Apply,
+Import, Edit, Use shortcuts on keypad, and Follow active app actions sit at the
+bottom. App icons select their assigned shortcut views. Back controls return to
+the console and home. A shared footer outside
+the page stack keeps Refresh and Settings icons at the bottom left on every
+page. Settings opens global preferences and returns to the originating page. The dialpad and other devices open a read-only details
 page. Multiple connected supported keypads block ambiguous configuration rather
 than implying independent routing that the worker does not support.
+
+Keypad navigation contains only Keys and Applications. Applications lists only
+assigned available apps and Screenshot, deduplicated in keypad order. Rounded
+cards show original icons, assigned key positions, and shortcut counts, with
+profile selection, import, and editing in each app card. Screenshot remains a
+system action without profile controls. Search filters by name or desktop ID;
+empty layouts and searches without matches have distinct messages. Device
+permission status, repair, and reconnect controls belong to the global Settings
+page opened by the footer gear; authorization feedback is displayed there.
 
 Inventory belongs only to the GUI: read USB/HID sysfs metadata and bounded
 connected-device Bluetooth metadata through existing system tools. Do not open
@@ -20,6 +34,14 @@ device input handles, start Bluetooth discovery, pair devices, or add worker
 polling. The scan runs asynchronously while settings is open; window closure
 stops refreshes. Device illustrations are original Qt drawing code, with external
 visual references recorded in `docs/UI-REFERENCES.md` and no bundled screenshots.
+Each device has its own status dot: connected green, disconnected red, searching
+blinking yellow, unconfirmed steady yellow. On both the home screen and Console
+component selector, show a reported battery percentage beside the dot beneath
+its device; omit the percentage when battery data is absent.
+Confirmed devices stay green during
+background refreshes; explicit Refresh searches all indicators. Blink timers run
+only while the indicator is visible and searching. The GUI retains devices seen
+during its current session as disconnected when absent from a successful scan.
 
 Opening or reactivating settings ensures the worker is running, reloads the
 compiled runtime and selects Apps page 0. The worker is supervised by the

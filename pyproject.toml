@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mx-creative-control"
-version = "0.1.5"
+version = "0.2.0"
 description = "A focused Ubuntu configurator for the Logitech MX Creative Keypad"
 requires-python = ">=3.10"
 dependencies = ["PySide6-Essentials==6.10.2", "shiboken6==6.10.2"]

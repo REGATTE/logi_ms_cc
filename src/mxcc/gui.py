@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__, ipc, service
 from .applications import discover_applications
+from .application_views import ApplicationCard
 from .appearance import AppearanceController
 from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
 from .device_navigation import DeviceDetails, DeviceScanner
-from .device_views import CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
+from .device_views import AppFooter, CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
 from .devices import discover_devices
 from .icons import FaceRenderer, display_icon, setup_icon_theme
 from .key_button import KeyButton
@@ -56,13 +58,14 @@ class MainWindow(QMainWindow):
         self.runtime = {}
         self.selected_slot = 0
         self.page = 0
+        self.preview_profile_id = "default"
         self.status = {}
         self.worker_error = None
         self.worker_sync_error = None
         self.permission_process = None
         self.selected_device_id = None
         self.devices = {}
-        self._editor_tab = 0
+        self._explicit_device_scan = False
         self._settings_return = "home"
         self.setWindowTitle("MX Creative Control")
         self.resize(1200, 820)
@@ -72,18 +75,20 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         shell = QVBoxLayout(root)
         shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
         self.views = QStackedWidget()
-        shell.addWidget(self.views)
+        shell.addWidget(self.views, 1)
+        self.footer = AppFooter()
+        shell.addWidget(self.footer)
+        self.footer.refresh_requested.connect(lambda: self.refresh_devices(explicit=True))
+        self.footer.settings_requested.connect(self.show_settings)
         self.home = DevicesHome()
         self.views.addWidget(self.home)
         self.home.device_selected.connect(self.open_device)
-        self.home.refresh_requested.connect(self.refresh_devices)
-        self.home.settings_requested.connect(lambda: self.show_settings("home"))
         self.console = ConsoleDevices()
         self.views.addWidget(self.console)
         self.console.back_requested.connect(self.show_home)
         self.console.device_selected.connect(self.open_device)
-        self.console.settings_requested.connect(lambda: self.show_settings("console"))
         self.editor = QWidget()
         self.editor.setObjectName("editorPage")
         self.views.addWidget(self.editor)
@@ -112,7 +117,7 @@ class MainWindow(QMainWindow):
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setFixedWidth(158)
-        self.navigation.addItems(["Keys", "Applications", "Permissions", "Settings"])
+        self.navigation.addItems(["Keys", "Applications"])
         outer.addWidget(self.navigation)
         content = QVBoxLayout()
         content.setContentsMargins(24, 8, 24, 20)
@@ -121,7 +126,6 @@ class MainWindow(QMainWindow):
         content.addWidget(self.stack, 1)
         self._build_customize()
         self._build_applications()
-        self._build_permissions()
         self._build_settings()
         self.notice = label("", "status", True)
         content.addWidget(self.notice)
@@ -151,23 +155,38 @@ class MainWindow(QMainWindow):
             self.device_scanner = DeviceScanner(discover_devices, self)
             self.device_scanner.updated.connect(self._devices_updated)
             self.device_scanner.failed.connect(lambda error: self.home.set_error(f"Could not refresh devices: {error}"))
-            self.device_scanner.scanning.connect(self.home.set_scanning)
+            self.device_scanner.scanning.connect(self._set_device_scanning)
             QTimer.singleShot(0, self.refresh_devices)
             self.device_timer.start()
         self.show_home()
 
-    def refresh_devices(self):
+    def refresh_devices(self, *, explicit=False):
         if self.device_scanner is not None:
+            if not self.device_scanner.busy:
+                self._explicit_device_scan = explicit
             self.device_scanner.refresh()
+
+    def _set_device_scanning(self, scanning):
+        self.footer.set_scanning(scanning)
+        self.home.set_scanning(scanning, force=self._explicit_device_scan)
+        self.console.set_scanning(scanning, force=self._explicit_device_scan)
+        self.details.connection_dot.set_scanning(scanning, force=self._explicit_device_scan)
+        if not scanning:
+            self._explicit_device_scan = False
 
     def _devices_updated(self, devices):
         previous = self.devices.get(self.selected_device_id)
-        self.devices = {device.id: device for device in devices}
+        detected = {device.id: device for device in devices}
+        # Keep devices seen during this window's session so an unplugged device
+        # can show its disconnected indicator and reconnect in the same card.
+        self.devices = {identifier: detected.get(identifier, replace(device, connected=False, battery_percent=None))
+                        for identifier, device in self.devices.items()}
+        self.devices.update(detected)
         self.home.update_devices(self.devices.values())
         self.console.update_devices(self.devices.values())
         self.home.set_error("")
         self.console.set_error("")
-        if previous is not None and self.selected_device_id not in self.devices:
+        if previous is not None and previous.connected is not False and self.selected_device_id not in detected:
             if is_console_device(previous) and any(is_console_device(item) for item in self.devices.values()):
                 self.show_console()
                 self.console.set_error(f"{previous.name} disconnected. Reconnect it to continue.")
@@ -183,8 +202,6 @@ class MainWindow(QMainWindow):
                     self.open_device(device.id)
                 else:
                     self.details.show_device(device, multiple_keypads=self._multiple_keypads(device))
-        elif self.views.currentWidget() is self.console and not any(is_console_device(item) for item in self.devices.values()):
-            self.show_home()
 
     def _multiple_keypads(self, device):
         return device.supported and sum(item.supported and item.connected is True for item in self.devices.values()) > 1
@@ -232,22 +249,24 @@ class MainWindow(QMainWindow):
             self.show_home()
 
     def _navigate_editor(self, index):
-        if index == 3:
-            self.show_settings("editor")
-            self.navigation.blockSignals(True)
-            self.navigation.setCurrentRow(self._editor_tab)
-            self.navigation.blockSignals(False)
-        elif index >= 0:
-            self._editor_tab = index
+        if index >= 0:
             self.stack.setCurrentIndex(index)
 
-    def show_settings(self, return_to="home"):
+    def show_settings(self, return_to=None):
+        current = self.views.currentWidget()
+        if current is self.settings_page:
+            return
+        if return_to is None:
+            return_to = "editor" if current is self.editor else "console" if current is self.console else "details" if current is self.details else "home"
         self._settings_return = return_to
         self.views.setCurrentWidget(self.settings_page)
 
     def _leave_settings(self):
         if self._settings_return == "console":
             self.show_console()
+            return
+        if self._settings_return == "details" and self.selected_device_id in self.devices:
+            self.open_device(self.selected_device_id)
             return
         if self._settings_return == "editor" and self.selected_device_id in self.devices:
             device = self.devices[self.selected_device_id]
@@ -267,17 +286,7 @@ class MainWindow(QMainWindow):
         self.profile_chips = []
         row.addLayout(self.profile_strip)
         row.addStretch()
-        self.preview_profile = QComboBox()
-        self.preview_profile.setMinimumWidth(190)
-        self.preview_profile.currentIndexChanged.connect(self.refresh_keys)
-        row.addWidget(label("Profile", "muted"))
-        row.addWidget(self.preview_profile)
         layout.addLayout(row)
-        profile_actions = QHBoxLayout()
-        profile_actions.addStretch()
-        profile_actions.addWidget(button("Use preview on keypad", self.use_preview_profile))
-        profile_actions.addWidget(button("Follow active app", self.follow_active_app))
-        layout.addLayout(profile_actions)
         body = QHBoxLayout()
         body.setSpacing(25)
         layout.addLayout(body, 1)
@@ -317,65 +326,102 @@ class MainWindow(QMainWindow):
         device_column.addWidget(self.reorder_hint)
         device_column.addStretch()
         body.addLayout(device_column, 1)
-        inspector = QFrame()
+        self.inspector = inspector = QFrame()
         inspector.setObjectName("actionInspector")
         inspector.setFixedWidth(320)
         side = QVBoxLayout(inspector)
         side.setContentsMargins(20, 22, 20, 22)
-        self.key_title = label("Key 1", "section")
-        side.addWidget(self.key_title)
-        self.key_description = label("Choose an installed app or a system action.", "muted", True)
+        side.addWidget(label("Application", "section"))
+        self.app_combo = QComboBox()
+        self.app_combo.currentIndexChanged.connect(self._refresh_action_buttons)
+        side.addWidget(self.app_combo)
+        self.key_description = label("Choose an app or a system action for this key.", "muted", True)
         side.addWidget(self.key_description)
         side.addSpacing(14)
-        side.addWidget(label("Application"))
-        self.app_combo = QComboBox()
-        self.app_combo.currentIndexChanged.connect(self._refresh_assignment)
-        side.addWidget(self.app_combo)
-        side.addWidget(label("Shortcut profile"))
-        self.profile_combo = QComboBox()
-        side.addWidget(self.profile_combo)
-        self.apply_button = button("Apply to key", self.apply_key, True)
-        side.addWidget(self.apply_button)
-        side.addSpacing(14)
-        side.addWidget(button("Import shortcuts…", self.import_shortcuts))
-        side.addWidget(button("Edit shortcuts…", self.edit_shortcuts))
-        side.addWidget(label("Profiles are editable JSON files. Imported profiles stay on this computer until you export them.", "muted", True))
-        side.addStretch()
         self.active_label = label("Active application: —", "muted", True)
         side.addWidget(self.active_label)
+        side.addStretch()
+        self.apply_button = button("Apply to key", self.apply_key, True)
+        side.addWidget(self.apply_button)
+        self.import_button = button("Import shortcuts…", self.import_shortcuts)
+        self.edit_button = button("Edit shortcuts…", self.edit_shortcuts)
+        side.addWidget(self.import_button)
+        side.addWidget(self.edit_button)
+        self.use_shortcuts_button = button("Use shortcuts on keypad", self.use_preview_profile)
+        side.addWidget(self.use_shortcuts_button)
+        side.addWidget(button("Follow active app", self.follow_active_app))
         body.addWidget(inspector)
-        self.stack.addWidget(widget)
+        scroll = QScrollArea()
+        scroll.setObjectName("editorScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(widget)
+        self.stack.addWidget(scroll)
 
     def _build_applications(self):
         widget = QWidget()
+        widget.setObjectName("applicationsPage")
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 24, 0, 0)
+        layout.setContentsMargins(0, 18, 0, 0)
+        layout.setSpacing(16)
         row = QHBoxLayout()
-        row.addWidget(label("Installed applications", "section"))
-        row.addStretch()
-        row.addWidget(button("Rescan", self.rescan))
+        heading = QVBoxLayout()
+        heading.setSpacing(6)
+        heading.addWidget(label("Applications", "title"))
+        heading.addWidget(label("Manage shortcuts for the apps on your keypad.", "muted", True))
+        row.addLayout(heading, 1)
+        self.applications_count = label("", "applicationCount")
+        row.addWidget(self.applications_count, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(row)
-        layout.addWidget(label("Original icons come from each app’s desktop entry and your icon theme.", "muted", True))
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(12)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Find an app…")
+        self.search.setObjectName("applicationSearch")
+        self.search.setPlaceholderText("Search assigned applications…")
+        self.search.setAccessibleName("Search assigned applications")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.filter_apps)
-        layout.addWidget(self.search)
-        self.app_table = QTableWidget(0, 3)
-        self.app_table.setHorizontalHeaderLabels(["Application", "Shortcut profile", "Actions"])
-        self.app_table.verticalHeader().hide()
-        self.app_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.app_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.app_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.app_table.setColumnWidth(1, 220)
-        self.app_table.setColumnWidth(2, 185)
-        layout.addWidget(self.app_table)
-        layout.addWidget(label("New apps appear after Rescan. Assign a profile, import JSON, or create shortcuts here.", "muted", True))
+        toolbar.addWidget(self.search, 1)
+        rescan = button("Rescan apps", self.rescan)
+        rescan.setObjectName("applicationAction")
+        rescan.setToolTip("Refresh installed applications and shortcut files")
+        toolbar.addWidget(rescan)
+        layout.addLayout(toolbar)
+        self.applications_scroll = QScrollArea()
+        self.applications_scroll.setObjectName("applicationsScroll")
+        self.applications_scroll.setWidgetResizable(True)
+        self.applications_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.applications_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        cards = QWidget()
+        cards.setObjectName("applicationCards")
+        self.application_cards_layout = QVBoxLayout(cards)
+        self.application_cards_layout.setContentsMargins(0, 0, 4, 0)
+        self.application_cards_layout.setSpacing(10)
+        self.application_cards_layout.addStretch()
+        self.application_cards = {}
+        self.applications_scroll.setWidget(cards)
+        layout.addWidget(self.applications_scroll, 1)
+        self.applications_empty = QFrame()
+        self.applications_empty.setObjectName("applicationsEmpty")
+        empty = QVBoxLayout(self.applications_empty)
+        empty.setContentsMargins(24, 32, 24, 32)
+        empty.addStretch()
+        self.applications_empty_title = label("", "section")
+        self.applications_empty_description = label("", "muted", True)
+        for item in (self.applications_empty_title, self.applications_empty_description):
+            item.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.addWidget(item)
+        empty.addStretch()
+        layout.addWidget(self.applications_empty, 1)
+        self.applications_empty.hide()
+        layout.addWidget(label("Add or reorder applications on the Keys page.", "muted", True))
         self.stack.addWidget(widget)
 
     def _build_permissions(self):
         widget = QWidget()
+        widget.setObjectName("permissionsSection")
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 24, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(label("Permissions & connection", "section"))
         layout.addWidget(label("The app runs as your normal user. Ubuntu may ask an administrator to authorize device access once.", "muted", True))
         self.permission_labels = {}
@@ -393,8 +439,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.repair_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(button("Reconnect / check again", self.start_worker), 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(label("On Wayland, app keys launch applications, but this version cannot focus their existing windows or switch pages automatically. X11 supports both; manual pages work on either session.", "muted", True))
-        layout.addStretch()
-        self.stack.addWidget(widget)
+        self.permissions_notice = label("", "status", True)
+        self.permissions_notice.hide()
+        layout.addWidget(self.permissions_notice)
+        return widget
 
     def _build_settings(self):
         self.settings_page = QWidget()
@@ -450,6 +498,9 @@ class MainWindow(QMainWindow):
         row.addStretch()
         layout.addLayout(row)
         layout.addWidget(label("Exports include layouts and shortcut profiles. Install the apps on the other PC; their original icons are resolved there.", "muted", True))
+        layout.addSpacing(26)
+        self.permissions_section = self._build_permissions()
+        layout.addWidget(self.permissions_section)
         layout.addSpacing(20)
         layout.addWidget(label(f"Shortcut profiles\n{profiles_dir()}", "muted", True))
         layout.addWidget(label(f"MX Creative Control {__version__} · Independent Linux application", "muted"))
@@ -458,15 +509,8 @@ class MainWindow(QMainWindow):
         self.views.addWidget(self.settings_page)
 
     def _populate_apps(self):
-        previous = self.preview_profile.currentData()
-        self.preview_profile.blockSignals(True)
-        self.preview_profile.clear()
-        self.preview_profile.addItem("General shortcuts", "default")
-        for profile in self.profiles.values():
-            if profile["id"] != "default":
-                self.preview_profile.addItem(profile["name"], profile["id"])
-        self.preview_profile.setCurrentIndex(max(0, self.preview_profile.findData(previous)))
-        self.preview_profile.blockSignals(False)
+        if self.preview_profile_id not in self.profiles:
+            self.preview_profile_id = "default"
         self.app_combo.blockSignals(True)
         self.app_combo.clear()
         self.app_combo.addItem("Empty key", None)
@@ -474,25 +518,36 @@ class MainWindow(QMainWindow):
         for app in self.apps:
             self.app_combo.addItem(display_icon(app.icon, application=True), app.name, app.id)
         self.app_combo.blockSignals(False)
-        self.app_table.setRowCount(len(self.apps))
-        for row, app in enumerate(self.apps):
-            item = QTableWidgetItem(display_icon(app.icon, application=True), app.name)
-            item.setToolTip(f"{app.id}\n{app.path}")
-            self.app_table.setItem(row, 0, item)
-            combo = QComboBox()
-            self.fill_profile_combo(combo, app.id)
-            combo.currentIndexChanged.connect(lambda index, a=app, c=combo: self.assign_profile(a.id, c.currentData()))
-            self.app_table.setCellWidget(row, 1, combo)
-            actions = QWidget()
-            actions_layout = QHBoxLayout(actions)
-            actions_layout.setContentsMargins(3, 3, 3, 3)
-            actions_layout.addWidget(button("Import", lambda checked=False, a=app: self.import_shortcuts(application=a)))
-            actions_layout.addWidget(button("Edit", lambda checked=False, a=app: self.edit_shortcuts(application=a)))
-            self.app_table.setCellWidget(row, 2, actions)
-            self.app_table.setRowHeight(row, 49)
-        self.filter_apps(self.search.text())
+        self._populate_application_cards()
         self.select_key(self.selected_slot)
         self._populate_profile_strip()
+
+    def _populate_application_cards(self):
+        indexed = {app.id: app for app in self.apps}
+        identifiers = list(dict.fromkeys(identifier for identifier in self.settings["launchers"]
+                                        if identifier == "@screenshot" or identifier in indexed))
+        for card in self.application_cards.values():
+            self.application_cards_layout.removeWidget(card)
+            card.hide()
+            card.deleteLater()
+        self.application_cards = {}
+        for identifier in identifiers:
+            app = indexed.get(identifier)
+            system_action = identifier == "@screenshot"
+            slots = [index + 1 for index, value in enumerate(self.settings["launchers"]) if value == identifier]
+            card = ApplicationCard(identifier, "Screenshot" if system_action else app.name,
+                                   display_icon("applets-screenshooter") if system_action else display_icon(app.icon, application=True),
+                                   slots, system_action=system_action)
+            if app is not None:
+                self.fill_profile_combo(card.profile_combo, app.id)
+                card.set_profile_summary(profile_for_app(app, self.profiles, self.settings["profile_assignments"]))
+                card.profile_changed.connect(lambda profile_id, a=app: self.assign_profile(a.id, profile_id))
+                card.import_requested.connect(lambda a=app: self.import_shortcuts(application=a))
+                card.edit_requested.connect(lambda a=app: self.edit_shortcuts(application=a))
+            self.application_cards[identifier] = card
+            self.application_cards_layout.insertWidget(self.application_cards_layout.count() - 1, card)
+        self.applications_count.setText(f"{len(identifiers)} assigned")
+        self.filter_apps(self.search.text())
 
     def _populate_profile_strip(self):
         while self.profile_strip.count():
@@ -532,12 +587,12 @@ class MainWindow(QMainWindow):
         if profile_id is None:
             self.change_page(0)
         else:
-            self.preview_profile.setCurrentIndex(self.preview_profile.findData(profile_id))
+            self.preview_profile_id = profile_id
             self.use_preview_profile()
 
     def _refresh_profile_strip(self):
         for profile_id, control in self.profile_chips:
-            control.setChecked(profile_id is None if self.page == 0 else profile_id == self.preview_profile.currentData())
+            control.setChecked(profile_id is None if self.page == 0 else profile_id == self.preview_profile_id)
 
     def fill_profile_combo(self, combo, app_id):
         combo.blockSignals(True)
@@ -550,10 +605,10 @@ class MainWindow(QMainWindow):
         combo.setCurrentIndex(max(0, combo.findData(current)))
         combo.blockSignals(False)
 
-    def _refresh_assignment(self):
-        app_id = self.app_combo.currentData()
-        self.fill_profile_combo(self.profile_combo, app_id)
-        self.profile_combo.setEnabled(app_id not in (None, "@screenshot"))
+    def _refresh_action_buttons(self):
+        self.import_button.setEnabled(self.page == 0 and self.selected_app() is not None)
+        self.edit_button.setEnabled(self.page == 1 or self.selected_app() is not None)
+        self.use_shortcuts_button.setEnabled(self.page == 1)
 
     def selected_app(self):
         app_id = self.app_combo.currentData()
@@ -563,13 +618,12 @@ class MainWindow(QMainWindow):
         self.selected_slot = slot
         for index, key in enumerate(self.key_buttons):
             key.setChecked(index == slot)
-        self.key_title.setText(f"Key {slot + 1:02d}")
+        self.inspector.setAccessibleName(f"Key {slot + 1} settings")
         app_id = self.settings["launchers"][slot]
         self.app_combo.setCurrentIndex(max(0, self.app_combo.findData(app_id)))
-        self._refresh_assignment()
-        self.key_description.setText("Choose an installed app or a system action." if self.page == 0 else "Edit the previewed profile to change shortcut keys.")
+        self._refresh_action_buttons()
+        self.key_description.setText("Choose an app or a system action for this key." if self.page == 0 else "Edit this app’s shortcuts to change its keys.")
         self.app_combo.setEnabled(self.page == 0)
-        self.profile_combo.setEnabled(self.page == 0 and self.selected_app() is not None)
         self.apply_button.setEnabled(self.page == 0)
 
     def change_page(self, page):
@@ -583,7 +637,7 @@ class MainWindow(QMainWindow):
                 pass
 
     def use_preview_profile(self):
-        profile_id = self.preview_profile.currentData()
+        profile_id = self.preview_profile_id
         available = profile_id == "default" or any(p["id"] == profile_id for p in self.runtime["profiles"])
         if not available:
             QMessageBox.information(self, "Assign this profile first", "Assign this profile to an installed application in Applications before using it on the keypad.")
@@ -619,7 +673,7 @@ class MainWindow(QMainWindow):
         if self.page == 0:
             keys = self.runtime["pages"][0]["keys"]
         else:
-            profile_id = self.preview_profile.currentData()
+            profile_id = self.preview_profile_id
             profile = self.profiles.get(profile_id, self.profiles.get("default"))
             keys = [None] * 9
             if profile:
@@ -671,9 +725,6 @@ class MainWindow(QMainWindow):
         launchers[self.selected_slot] = self.app_combo.currentData()
         candidate = {**self.settings, "launchers": launchers,
                      "profile_assignments": dict(self.settings["profile_assignments"])}
-        app = self.selected_app()
-        if app:
-            self._set_assignment(app.id, self.profile_combo.currentData(), settings=candidate)
         available = {app.id for app in self.apps} | {"@screenshot"}
         selected = sum(app_id in available for app_id in launchers[:self.selected_slot])
         try:
@@ -703,6 +754,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not save order", str(exc))
             return
         self.select_key(destination)
+        self._populate_application_cards()
         self._populate_profile_strip()
 
     def _set_assignment(self, app_id, profile_id, *, settings=None):
@@ -715,8 +767,12 @@ class MainWindow(QMainWindow):
     def assign_profile(self, app_id, profile_id):
         self._set_assignment(app_id, profile_id)
         self.safe_save()
-        self._refresh_assignment()
+        self._refresh_action_buttons()
         self._populate_profile_strip()
+        app = next((app for app in self.apps if app.id == app_id), None)
+        card = self.application_cards.get(app_id)
+        if app is not None and card is not None:
+            card.set_profile_summary(profile_for_app(app, self.profiles, self.settings["profile_assignments"]))
 
     def safe_save(self):
         try:
@@ -732,8 +788,20 @@ class MainWindow(QMainWindow):
         self.notice.setText(f"Found {len(self.apps)} installed applications.")
 
     def filter_apps(self, text):
-        for row, app in enumerate(self.apps):
-            self.app_table.setRowHidden(row, text.casefold() not in (app.name + " " + app.id).casefold())
+        query = text.strip().casefold()
+        visible = 0
+        for card in self.application_cards.values():
+            matches = query in card.search_text
+            card.setVisible(matches)
+            visible += matches
+        self.applications_scroll.setVisible(bool(visible))
+        self.applications_empty.setVisible(not visible)
+        if self.application_cards:
+            self.applications_empty_title.setText("No matching applications")
+            self.applications_empty_description.setText("Try another name or clear your search.")
+        else:
+            self.applications_empty_title.setText("No applications assigned yet")
+            self.applications_empty_description.setText("Choose an application on the Keys page to add it here.")
 
     def import_shortcuts(self, checked=False, *, application=None):
         application = application or self.selected_app()
@@ -760,7 +828,7 @@ class MainWindow(QMainWindow):
     def edit_shortcuts(self, checked=False, *, application=None):
         preview_edit = self.page == 1 and application is None
         if preview_edit:
-            profile = self.profiles.get(self.preview_profile.currentData())
+            profile = self.profiles.get(self.preview_profile_id)
             application = next((a for a in self.apps if profile and a.id in profile["desktop_ids"]), None)
         else:
             application = application or self.selected_app()
@@ -936,15 +1004,24 @@ class MainWindow(QMainWindow):
 
     def _permissions_error(self, error):
         self.repair_button.setEnabled(True)
-        self.notice.setText("Ubuntu’s authorization service could not start. Check that polkit is installed.")
+        message = "Ubuntu’s authorization service could not start. Check that polkit is installed."
+        self.notice.setText(message)
+        self.permissions_notice.setText(message)
+        self.permissions_notice.show()
 
     def _permissions_finished(self, code, status):
         self.repair_button.setEnabled(True)
         if code == 0:
-            self.notice.setText("Permissions updated. Reconnect the keypad if it is still unavailable.")
+            message = "Permissions updated. Reconnect the keypad if it is still unavailable."
+            self.notice.setText(message)
+            self.permissions_notice.setText(message)
+            self.permissions_notice.show()
             self.start_worker()
         elif code in (126, 127):
-            self.notice.setText("Permission setup was cancelled or could not be authorized.")
+            message = "Permission setup was cancelled or could not be authorized."
+            self.notice.setText(message)
+            self.permissions_notice.setText(message)
+            self.permissions_notice.show()
         else:
             details = bytes(self.permission_process.readAllStandardError()).decode(errors="replace")
             QMessageBox.warning(self, "Permission setup failed", details.strip() or "Ubuntu could not update the device permissions.")

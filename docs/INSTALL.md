@@ -10,7 +10,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.1.5_amd64.deb
+sudo apt install ./mx-creative-control_0.2.0_amd64.deb
 mx-creative-control
 ```
 
@@ -26,24 +26,38 @@ An arm64 machine requires an arm64 build.
 
 Connect the keypad over USB. Open **MX Creative Control** from Ubuntu's app
 launcher and select **MX Creative Console** on the device home screen. Choose
-the keypad by clicking its image or sidebar item. Under **Keys**, select a key,
-choose an installed app, then press **Apply to key** in
-the right-hand inspector. App images come from their original desktop icons.
+the keypad by clicking its image. Under **Keys**, select a key,
+choose an installed app or Screenshot, then press **Apply to key** at the bottom
+of the rounded right-hand inspector. The picker includes all installed apps;
+applying a key preserves the app's existing shortcut assignment. App images come
+from their original desktop icons.
 Artwork fills each key with a narrow black border and no added white tile.
 Re-scan after installing an additional
 app; the app must provide a desktop entry to appear in the list. A ChatGPT browser
 shortcut or PWA appears if the browser creates a desktop entry for it.
 
+The **Applications** page lists only currently assigned, available apps and
+Screenshot, in key order with duplicate entries removed. Rounded cards show each
+app's original icon, assigned keys, and shortcut count. Search the cards, choose a
+shortcut profile, import JSON, or edit shortcuts (**Set up** for apps without a
+profile). **Rescan apps** refreshes installed apps. Add apps through the **Keys**
+picker. The Keys page has no profile dropdown or key-number heading; app icons
+above the keypad select shortcuts. Apply, Import, Edit, Use shortcuts on keypad,
+and Follow active app actions are grouped at the bottom of the inspector.
+
 The home screen lists connected Logitech USB/HID and Bluetooth devices, grouping
-the keypad and dialpad under **MX Creative Console**. Its
-Refresh button updates the inventory; it also refreshes while the window is
+the keypad and dialpad under **MX Creative Console**. The shared bottom-left
+Refresh icon is available on every page and updates the inventory; it also refreshes while the window is
 open. Open the Console card to see its components side by side and select the
-keypad or dialpad by its image or sidebar item. The dialpad and other devices
+keypad or dialpad by its image. The dialpad and other devices
 open connection details only.
+Both selection pages show each device's reported battery percentage beside its
+connection dot beneath the device. No percentage appears when battery data is
+unavailable.
 No Bluetooth pairing or configuration of other devices is performed.
 Connect just one supported keypad to use the editor; multiple keypads are
 shown individually, but their configuration cannot be targeted independently.
-Back controls return to the console or all devices. The home-screen Settings button opens
+Back controls return to the console or all devices. The Settings gear at the bottom left of every page opens
 global settings, which are also accessible from the editor.
 
 The Apps page packs available apps and Screenshot left-to-right, top-to-bottom,
@@ -69,7 +83,7 @@ from the application launcher even if the desktop hides the tray.
 
 The panel icon matches the application's mint nine-key icon. Source checkouts
 resolve the SVG directly, so installing it into a global icon theme is not
-required. The home-screen Settings button opens **Settings → Appearance → Theme**, with System setting (default),
+required. The Settings gear at the bottom left of every page opens **Settings → Appearance → Theme**, with System setting (default),
 Light and Dark. System setting follows desktop appearance changes while the
 window is open; explicit choices persist across restarts.
 
@@ -99,7 +113,10 @@ and `/dev/uinput`. The first grants access to the keypad; the second allows the
 worker to emit configured keys. It does not grant access to reading other
 keyboards, change user groups, or make device files writable by everyone.
 
-If settings reports missing access, use its permission setup action. The app
+Open the footer's Settings gear and find **Permissions & connection** for access
+status, reconnect checks, and **Set up device permissions**. These controls are
+in global Settings, outside the keypad's Keys/Applications navigation.
+If settings reports missing access, use this permission setup action. The app
 explains the requested access, then Ubuntu's polkit dialog requests an
 administrator's authentication. The fixed root-owned helper repairs the
 packaged permission rule, reloads udev, loads `uinput` if needed, and refreshes the matching
@@ -131,8 +148,9 @@ Existing-window activation and automatic shortcut-page switching support X11.
 Wayland keeps launching apps and manually selected shortcut pages working, but
 this implementation cannot focus existing Wayland windows or detect their
 global focus changes. The settings status
-shows this limitation. In the shortcut preview, choose a profile and press
-**Use preview on keypad** to select it manually. Select **Ubuntu on Xorg** at login if automatic focus
+shows this limitation. Use the app icons above the keypad to select shortcuts,
+or press **Use shortcuts on keypad** to apply the current shortcut view manually.
+**Follow active app** restores automatic matching. Select **Ubuntu on Xorg** at login if automatic focus
 switching is required. Keyboard shortcuts are emitted as Linux key codes, so
 application bindings and the current keyboard layout still determine their
 effect.
@@ -153,7 +171,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.5_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.2.0_amd64.deb
 python3 scripts/source-archive.py
 ```
 

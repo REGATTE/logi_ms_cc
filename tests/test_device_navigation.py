@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
 
@@ -128,41 +129,82 @@ def test_unsupported_device_opens_its_own_details_without_keypad_controls(window
 
 
 def test_global_settings_returns_to_the_page_that_opened_it(window):
-    click(window.home.settings_button)
+    click(window.footer.settings_button)
     assert window.views.currentWidget() is window.settings_page
     click(window.settings_back)
     assert window.views.currentWidget() is window.home
 
     click(window.home.cards[CREATIVE_CONSOLE_ID])
-    click(window.console.settings_button)
+    click(window.footer.settings_button)
     assert window.views.currentWidget() is window.settings_page
     click(window.settings_back)
     assert window.views.currentWidget() is window.console
     click(window.console.cards["keypad"])
     window.navigation.setCurrentRow(1)
     applications_page = window.stack.currentWidget()
-    window.navigation.setCurrentRow(3)
+    click(window.footer.settings_button)
     assert window.views.currentWidget() is window.settings_page
     click(window.settings_back)
     assert window.views.currentWidget() is window.editor
     assert window.selected_device_id == "keypad"
     assert window.navigation.currentRow() == 1
     assert window.stack.currentWidget() is applications_page
+    window.open_device("dialpad")
+    click(window.footer.settings_button)
+    assert window.views.currentWidget() is window.settings_page
+    click(window.footer.settings_button)
+    click(window.settings_back)
+    assert window.views.currentWidget() is window.details
+    assert window.selected_device_id == "dialpad"
+
+
+def test_shared_footer_refresh_is_available_on_every_page(window):
+    scanner = Mock(busy=False)
+    window.device_scanner = scanner
+    pages = [window.home, window.console, window.details, window.settings_page]
+    for page in pages:
+        window.views.setCurrentWidget(page)
+        QApplication.processEvents()
+        assert window.footer.refresh_button.isVisible()
+        assert window.footer.settings_button.isVisible()
+        click(window.footer.refresh_button)
+        assert window._explicit_device_scan is True
+    for index in range(window.stack.count()):
+        window.open_device("keypad")
+        window.navigation.setCurrentRow(index)
+        QApplication.processEvents()
+        assert window.footer.refresh_button.isVisible()
+        assert window.footer.settings_button.isVisible()
+        click(window.footer.refresh_button)
+    assert scanner.refresh.call_count == len(pages) + window.stack.count()
+    window._set_device_scanning(True)
+    assert not window.footer.refresh_button.isEnabled()
+    window._set_device_scanning(False)
+    assert window.footer.refresh_button.isEnabled()
 
 
 @pytest.mark.parametrize("in_settings", [False, True])
 def test_unplugging_selected_device_returns_to_console_even_from_settings(window, in_settings):
     open_keypad(window)
     if in_settings:
-        window.navigation.setCurrentRow(3)
+        click(window.footer.settings_button)
     window._devices_updated([device("mouse", kind="mouse"), device("dialpad", kind="dialpad")])
     assert window.views.currentWidget() is window.console
     assert window.selected_device_id is None
-    assert "keypad" not in window.console.cards
+    keypad_card = window.console.cards["keypad"]
+    assert keypad_card.indicators["keypad"].state == "disconnected"
     assert "MX Creative Keypad disconnected" in window.console.notice.text()
     window._devices_updated([device("mouse", kind="mouse")])
-    assert window.views.currentWidget() is window.home
-    assert CREATIVE_CONSOLE_ID not in window.home.cards
+    assert window.views.currentWidget() is window.console
+    assert CREATIVE_CONSOLE_ID in window.home.cards
+    assert window.console.cards["dialpad"].indicators["dialpad"].state == "disconnected"
+    click(keypad_card)
+    assert window.views.currentWidget() is window.details
+    assert window.details.values["status"].text() == "Disconnected"
+    window._devices_updated([device()])
+    assert window.console.cards["keypad"] is keypad_card
+    assert keypad_card.indicators["keypad"].state == "connected"
+    assert window.views.currentWidget() is window.editor
 
 
 @pytest.mark.parametrize("connected", [False, None])

@@ -3,7 +3,7 @@
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from .device_views import DeviceArt
+from .device_views import ConnectionIndicator, DeviceArt
 
 
 class _ScanSignals(QObject):
@@ -83,7 +83,11 @@ class DeviceDetails(QWidget):
         body.setSpacing(64)
         self.art = DeviceArt("keypad")
         self.art.setMinimumSize(300, 300)
-        body.addWidget(self.art, 1)
+        artwork = QVBoxLayout()
+        artwork.addWidget(self.art, 1)
+        self.connection_dot = ConnectionIndicator(parent=self)
+        artwork.addWidget(self.connection_dot)
+        body.addLayout(artwork, 1)
         panel = QVBoxLayout()
         self.summary = QLabel()
         self.summary.setObjectName("section")
@@ -112,6 +116,7 @@ class DeviceDetails(QWidget):
     def show_device(self, device, *, multiple_keypads=False):
         self.title.setText(device.name)
         self.art.set_kind(device.kind)
+        self.connection_dot.set_device(device)
         self.values["connection"].setText(device.connection)
         self.values["status"].setText("Connected" if device.connected is True else
                                       "Disconnected" if device.connected is False else "Connection unknown")
@@ -125,4 +130,5 @@ class DeviceDetails(QWidget):
             self.explanation.setText("A connection to this keypad is not confirmed. Reconnect it, then select it from Devices.")
         else:
             self.summary.setText("Customization is not available for this device yet")
-            self.explanation.setText("This device is detected by Ubuntu. MX Creative Control currently customizes the MX Creative Keypad; your device’s existing behavior is unchanged.")
+            status = "This device is currently disconnected." if device.connected is False else "This device is detected by Ubuntu."
+            self.explanation.setText(f"{status} MX Creative Control currently customizes the MX Creative Keypad; your device’s existing behavior is unchanged.")

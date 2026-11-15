@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from math import ceil
+from math import ceil, cos, radians, sin
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+    QAbstractButton, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -19,23 +19,227 @@ def is_console_device(device):
     return device.kind in ("keypad", "dialpad")
 
 
-def _connection_state(device):
-    return "Connected" if device.connected is True else "Disconnected" if device.connected is False else "Connection unknown"
-
-
-def _connection_text(device):
-    details = [_connection_state(device), device.connection]
-    if device.battery_percent is not None:
-        details.append(f"{device.battery_percent}% battery")
-    return " · ".join(value for value in details if value)
-
-
 def _label(text: str, name: str, *, wrap=False) -> QLabel:
     widget = QLabel(text)
     widget.setObjectName(name)
     widget.setWordWrap(wrap)
     widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     return widget
+
+
+class IconAction(QAbstractButton):
+    """Small palette-aware line icon with a full keyboard/mouse target."""
+
+    def __init__(self, kind, title, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.setObjectName("iconAction")
+        self.setFixedSize(40, 40)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAccessibleName(title)
+        self.setToolTip(title)
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Type.Enter, QEvent.Type.Leave,
+                            QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            self.update()
+        return result
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.click()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isEnabled() and (self.underMouse() or self.hasFocus() or self.isDown()):
+            color = self.palette().color(QPalette.ColorRole.Accent)
+            fill = QColor(color)
+            fill.setAlpha(55 if self.isDown() else 30)
+            painter.setBrush(fill)
+            painter.setPen(QPen(color, 1.5) if self.hasFocus() else Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 7, 7)
+        group = QPalette.ColorGroup.Active if self.isEnabled() else QPalette.ColorGroup.Disabled
+        color = self.palette().color(group, QPalette.ColorRole.WindowText)
+        painter.setPen(QPen(color, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.translate(8, 8)
+        path = QPainterPath()
+        if self.kind == "refresh":
+            path.moveTo(19, 8)
+            path.cubicTo(17.8, 5.5, 15.2, 4, 12, 4)
+            path.cubicTo(7.6, 4, 4, 7.6, 4, 12)
+            path.cubicTo(4, 16.4, 7.6, 20, 12, 20)
+            path.cubicTo(16, 20, 19.3, 17.2, 19.9, 13.5)
+            path.moveTo(19, 3.5)
+            path.lineTo(19, 8)
+            path.lineTo(14.5, 8)
+            painter.drawPath(path)
+        else:
+            for tooth in range(8):
+                for offset, radius in ((-18, 7.5), (-10, 10), (10, 10), (18, 7.5)):
+                    angle = radians(tooth * 45 + offset - 90)
+                    point = QPointF(12 + radius * cos(angle), 12 + radius * sin(angle))
+                    if path.elementCount():
+                        path.lineTo(point)
+                    else:
+                        path.moveTo(point)
+            path.closeSubpath()
+            painter.drawPath(path)
+            painter.drawEllipse(QPointF(12, 12), 3.2, 3.2)
+        painter.end()
+
+
+class AppFooter(QWidget):
+    """One shared action row, independent of the currently displayed page."""
+
+    refresh_requested = Signal()
+    settings_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("appFooter")
+        self.setFixedHeight(64)
+        self.refresh_button = IconAction("refresh", "Refresh connected devices")
+        self.refresh_button.clicked.connect(self.refresh_requested)
+        self.settings_button = IconAction("settings", "Application settings")
+        self.settings_button.clicked.connect(self.settings_requested)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(36, 0, 36, 24)
+        layout.setSpacing(0)
+        actions = QWidget()
+        actions.setFixedWidth(88)
+        action_layout = QHBoxLayout(actions)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+        action_layout.addWidget(self.refresh_button)
+        action_layout.addWidget(self.settings_button)
+        layout.addWidget(actions)
+        layout.addStretch()
+        title = _label("MX Creative Control", "appFooterLabel")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        layout.addStretch()
+        layout.addSpacing(88)
+
+    def set_scanning(self, scanning: bool):
+        self.refresh_button.setEnabled(not scanning)
+        title = "Refreshing devices…" if scanning else "Refresh connected devices"
+        self.refresh_button.setToolTip(title)
+        self.refresh_button.setAccessibleName(title)
+
+
+class ConnectionIndicator(QWidget):
+    """One device's connection state; only visible searches need a timer."""
+
+    COLORS = {"connected": "#31b96e", "disconnected": "#e35b63",
+              "unknown": "#e9ba3e", "searching": "#e9ba3e"}
+
+    def __init__(self, device=None, parent=None, *, show_battery=False):
+        super().__init__(parent)
+        self.setObjectName("connectionIndicator")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(18)
+        self.setMinimumWidth(18)
+        self.device = device
+        self.show_battery = show_battery
+        self.state = "unknown"
+        self.blink_on = True
+        self._scanning = False
+        self._force_search = False
+        self.timer = QTimer(self)
+        self.timer.setInterval(500)
+        self.timer.timeout.connect(self._blink)
+        self._refresh()
+
+    @property
+    def battery_text(self):
+        if self.show_battery and self.device is not None and self.device.battery_percent is not None:
+            return f"{self.device.battery_percent}%"
+        return ""
+
+    @property
+    def description(self):
+        state = {"connected": "Connected", "disconnected": "Disconnected",
+                 "unknown": "Connection unknown", "searching": "Searching"}[self.state]
+        if self.device is None:
+            return state
+        details = [state, self.device.connection]
+        if self.device.battery_percent is not None:
+            details.append(f"{self.device.battery_percent}% battery")
+        return " · ".join(value for value in details if value)
+
+    def set_device(self, device):
+        self.device = device
+        self._refresh()
+
+    def set_scanning(self, scanning: bool, force: bool = False):
+        self._scanning = scanning
+        self._force_search = force
+        self._refresh()
+
+    def _refresh(self):
+        connected = self.device.connected if self.device is not None else None
+        if self._scanning and (self._force_search or connected is not True):
+            state = "searching"
+        else:
+            state = "connected" if connected is True else "disconnected" if connected is False else "unknown"
+        if state != self.state:
+            self.state = state
+            self.blink_on = True
+        if state == "searching" and self.isVisible():
+            if not self.timer.isActive():
+                self.timer.start()
+        else:
+            self.timer.stop()
+            self.blink_on = True
+        name = self.device.name if self.device is not None else "Device"
+        text = f"{name} · {self.description}"
+        if self.device is not None and self.device.detail:
+            text += f"\n{self.device.detail}"
+        self.setAccessibleName(text)
+        self.setToolTip(text)
+        self.setMinimumWidth(18 + (8 + self.fontMetrics().horizontalAdvance(self.battery_text)
+                                  if self.battery_text else 0))
+        self.update()
+
+    def _blink(self):
+        self.blink_on = not self.blink_on
+        self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh()
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        self.blink_on = True
+        super().hideEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor(self.COLORS[self.state])
+        if self.state == "searching" and not self.blink_on:
+            color.setAlpha(45)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        battery = self.battery_text
+        text_width = self.fontMetrics().horizontalAdvance(battery)
+        total_width = 10 + (8 + text_width if battery else 0)
+        left = (self.width() - total_width) / 2
+        painter.drawEllipse(QPointF(left + 5, self.height() / 2), 5, 5)
+        if battery:
+            painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+            painter.drawText(QRectF(left + 18, 0, text_width, self.height()),
+                             Qt.AlignmentFlag.AlignCenter, battery)
+        painter.end()
 
 
 class DeviceArt(QWidget):
@@ -91,8 +295,11 @@ class DeviceArt(QWidget):
         kinds = self.kinds if self.kinds is not None else (self.kind,)
         for index, kind in enumerate(kinds):
             painter.save()
-            painter.translate(260 * (index + 0.5) / len(kinds), 120)
             factor = min(1.15, 260 / (172 * len(kinds)))
+            # Keep a pair's smaller drawings near their dots, on the same
+            # visual baseline as a full-size device illustration.
+            center_y = 120 if len(kinds) == 1 else 234 - 101 * factor
+            painter.translate(260 * (index + 0.5) / len(kinds), center_y)
             painter.scale(factor, factor)
             painter.translate(-130, -120)
             self._draw_device(painter, kind.casefold())
@@ -239,13 +446,53 @@ class _DeviceCardBase(QAbstractButton):
         layout.setSpacing(7)
         self.art = DeviceArt(kind, self)
         layout.addWidget(self.art, 1)
+        self.indicators = {}
+        self._scanning = False
+        self._force_search = False
+        self.indicator_row = QWidget(self)
+        self.indicator_row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.indicator_layout = QHBoxLayout(self.indicator_row)
+        self.indicator_layout.setContentsMargins(0, 0, 0, 0)
+        self.indicator_layout.setSpacing(0)
+        layout.addWidget(self.indicator_row)
         self.name_label = _label("", "deviceName", wrap=True)
-        self.connection_label = _label("", "deviceConnection", wrap=True)
-        self.connection_label.setMinimumHeight(36)
         self.support_label = _label("", "deviceSupport")
-        for widget in (self.name_label, self.connection_label, self.support_label):
+        for widget in (self.name_label, self.support_label):
             widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(widget)
+
+    def _set_indicators(self, devices):
+        devices = tuple(devices)
+        identifiers = {device.id for device in devices}
+        while self.indicator_layout.count():
+            self.indicator_layout.takeAt(0)
+        for identifier in set(self.indicators) - identifiers:
+            indicator = self.indicators.pop(identifier)
+            indicator.hide()
+            indicator.deleteLater()
+        for device in devices:
+            indicator = self.indicators.get(device.id)
+            if indicator is None:
+                indicator = ConnectionIndicator(device, self.indicator_row, show_battery=True)
+                self.indicators[device.id] = indicator
+            else:
+                indicator.set_device(device)
+            indicator.set_scanning(self._scanning, self._force_search)
+            self.indicator_layout.addWidget(indicator, 1)
+            indicator.show()
+        self._refresh_connection_metadata()
+
+    def _refresh_connection_metadata(self):
+        details = "\n".join(indicator.toolTip() for indicator in self.indicators.values())
+        self.setAccessibleName(f"{self.name_label.text()}, {details}")
+        self.setToolTip(details)
+
+    def set_scanning(self, scanning: bool, force: bool = False):
+        self._scanning = scanning
+        self._force_search = force
+        for indicator in self.indicators.values():
+            indicator.set_scanning(scanning, force)
+        self._refresh_connection_metadata()
 
     def enterEvent(self, event):
         super().enterEvent(event)
@@ -292,11 +539,9 @@ class DeviceCard(_DeviceCardBase):
         self.device = device
         self.art.set_kind(device.kind)
         self.name_label.setText(device.name)
-        self.connection_label.setText(_connection_text(device))
+        self._set_indicators([device])
         self.support_label.setText("Customize" if device.supported else "Device details")
-        self.setAccessibleName(f"{device.name}, {self.connection_label.text()}")
         self.setAccessibleDescription("Open device settings" if device.supported else "Open connection and support details")
-        self.setToolTip(device.detail or self.accessibleDescription())
         self.update()
 
 
@@ -311,14 +556,9 @@ class ConsoleCard(_DeviceCardBase):
         self.devices = tuple(devices)
         self.art.set_kinds(device.kind for device in self.devices)
         self.name_label.setText("MX Creative Console")
-        self.connection_label.setText("\n".join(
-            f"{'Keypad' if device.kind == 'keypad' else 'Dialpad'} · {_connection_state(device)}"
-            for device in self.devices))
+        self._set_indicators(self.devices)
         self.support_label.setText("Choose a device")
-        details = "\n".join(f"{device.name} · {_connection_text(device)}" for device in self.devices)
-        self.setAccessibleName(f"MX Creative Console, {details}")
         self.setAccessibleDescription("Choose a connected keypad or dialpad")
-        self.setToolTip(details)
         self.update()
 
 
@@ -366,8 +606,6 @@ class _DeviceGallery(QWidget):
 
 class DevicesHome(QWidget):
     device_selected = Signal(str)
-    refresh_requested = Signal()
-    settings_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -375,23 +613,13 @@ class DevicesHome(QWidget):
         self.cards = {}
         self._devices = ()
         self._scanning = False
+        self._force_search = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 30, 36, 24)
         layout.setSpacing(12)
         heading = QHBoxLayout()
         heading.addWidget(_label("Your devices", "homeTitle"))
         heading.addStretch()
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.setObjectName("homeAction")
-        self.refresh_button.setMinimumWidth(112)
-        self.refresh_button.setAccessibleName("Refresh connected devices")
-        self.refresh_button.clicked.connect(self.refresh_requested)
-        heading.addWidget(self.refresh_button)
-        self.settings_button = QPushButton("Settings")
-        self.settings_button.setObjectName("homeAction")
-        self.settings_button.setAccessibleName("Application settings")
-        self.settings_button.clicked.connect(self.settings_requested)
-        heading.addWidget(self.settings_button)
         layout.addLayout(heading)
         self.subtitle = _label("Select a device to personalize your setup.", "homeSubtitle", wrap=True)
         layout.addWidget(self.subtitle)
@@ -418,9 +646,6 @@ class DevicesHome(QWidget):
         empty_layout.addStretch()
         layout.addWidget(self.empty_state, 1)
         self.scroll.hide()
-        footer = _label("MX Creative Control", "homeFooter")
-        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(footer)
 
     def update_devices(self, devices):
         devices = tuple(devices)
@@ -446,6 +671,7 @@ class DevicesHome(QWidget):
                 self.cards[identifier].update_devices(value)
             else:
                 self.cards[identifier].update_device(value)
+            self.cards[identifier].set_scanning(self._scanning, self._force_search)
             ordered.append(self.cards[identifier])
         self.gallery.set_items(ordered)
         self.scroll.setVisible(bool(devices))
@@ -454,10 +680,11 @@ class DevicesHome(QWidget):
         self.subtitle.setText(f"{count} Logitech {'device' if count == 1 else 'devices'} · Select one to get started."
                               if count else "Your connected Logitech devices will appear here.")
 
-    def set_scanning(self, scanning: bool):
+    def set_scanning(self, scanning: bool, force: bool = False):
         self._scanning = scanning
-        self.refresh_button.setEnabled(not scanning)
-        self.refresh_button.setText("Refreshing…" if scanning else "Refresh")
+        self._force_search = force
+        for card in self.cards.values():
+            card.set_scanning(scanning, force)
         self.empty_title.setText("Looking for your devices…" if scanning else "No Logitech devices found")
         self.empty_description.setText("Checking connected USB and Bluetooth devices." if scanning
                                        else "Connect a device by USB or Bluetooth, then refresh.")
@@ -472,13 +699,14 @@ class ConsoleDevices(QWidget):
 
     back_requested = Signal()
     device_selected = Signal(str)
-    settings_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("consoleDevices")
         self.cards = {}
         self._devices = ()
+        self._scanning = False
+        self._force_search = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -492,29 +720,12 @@ class ConsoleDevices(QWidget):
         header.addWidget(self.back_button)
         header.addWidget(_label("MX Creative Console", "deviceTitle"))
         header.addStretch()
-        self.settings_button = QPushButton("Settings")
-        self.settings_button.setObjectName("homeAction")
-        self.settings_button.setAccessibleName("Application settings")
-        self.settings_button.clicked.connect(self.settings_requested)
-        header.addWidget(self.settings_button)
         layout.addLayout(header)
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-        self.navigation = QListWidget()
-        self.navigation.setObjectName("navigation")
-        self.navigation.setAccessibleName("Creative Console devices")
-        self.navigation.setFixedWidth(158)
-        self.navigation.setWordWrap(True)
-        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.navigation.itemClicked.connect(self._select_item)
-        self.navigation.itemActivated.connect(self._select_item)
-        body.addWidget(self.navigation)
         content = QVBoxLayout()
         content.setContentsMargins(24, 22, 24, 24)
         content.setSpacing(12)
         content.addWidget(_label("Choose a device", "section"))
-        content.addWidget(_label("Select a device below or in the sidebar to continue.", "homeSubtitle", wrap=True))
+        content.addWidget(_label("Select a device below to continue.", "homeSubtitle", wrap=True))
         self.notice = _label("", "homeNotice", wrap=True)
         self.notice.hide()
         content.addWidget(self.notice)
@@ -528,12 +739,8 @@ class ConsoleDevices(QWidget):
         self.gallery = _DeviceGallery(max_columns=2)
         self.scroll.setWidget(self.gallery)
         content.addWidget(self.scroll, 1)
-        body.addLayout(content, 1)
-        layout.addLayout(body, 1)
+        layout.addLayout(content, 1)
         self._update_missing_notice()
-
-    def _select_item(self, item):
-        self.device_selected.emit(item.data(Qt.ItemDataRole.UserRole))
 
     def _update_missing_notice(self):
         kinds = {device.kind for device in self._devices}
@@ -559,9 +766,6 @@ class ConsoleDevices(QWidget):
             card = self.cards.pop(identifier)
             card.hide()
             card.deleteLater()
-        current = self.navigation.currentItem()
-        selected = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
-        self.navigation.clear()
         ordered = []
         for device in devices:
             if device.id not in self.cards:
@@ -570,18 +774,16 @@ class ConsoleDevices(QWidget):
                 self.cards[device.id] = card
             else:
                 self.cards[device.id].update_device(device)
+            self.cards[device.id].set_scanning(self._scanning, self._force_search)
             ordered.append(self.cards[device.id])
-            item = QListWidgetItem(device.name)
-            item.setData(Qt.ItemDataRole.UserRole, device.id)
-            item.setToolTip(f"{device.name}\n{_connection_text(device)}")
-            item.setSizeHint(QSize(142, 64))
-            self.navigation.addItem(item)
-            if device.id == selected:
-                self.navigation.setCurrentItem(item)
-        if selected not in identifiers:
-            self.navigation.setCurrentRow(-1)
         self.gallery.set_items(ordered)
         self._update_missing_notice()
+
+    def set_scanning(self, scanning: bool, force: bool = False):
+        self._scanning = scanning
+        self._force_search = force
+        for card in self.cards.values():
+            card.set_scanning(scanning, force)
 
     def set_error(self, message: str):
         self.notice.setText(message)

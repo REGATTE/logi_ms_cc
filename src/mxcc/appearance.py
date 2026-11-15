@@ -60,6 +60,7 @@ def stylesheet_for(theme: str) -> str:
     return f"""QMainWindow, QDialog,
 QWidget#workspace, QWidget#deviceHome, QWidget#deviceGallery, QWidget#consoleDevices,
 QWidget#editorPage, QWidget#editorHeader, QWidget#editorStage,
+QWidget#applicationsPage, QWidget#applicationCards,
 QWidget#deviceDetails, QWidget#settingsPage, QWidget#editorSidebar {{ background: {c['background']}; }}
 QWidget {{ font-family: 'Inter', 'DejaVu Sans'; font-size: 13px; color: {c['text']}; }}
 QLabel#title, QLabel#homeTitle, QLabel#deviceTitle {{ font-size: 24px; font-weight: 600; }}
@@ -70,10 +71,21 @@ QLabel#deviceName {{ font-size: 15px; font-weight: 600; }}
 QLabel#deviceConnection, QLabel#deviceSupport {{ font-size: 12px; color: {c['muted']}; }}
 QLabel#homeEmpty {{ font-size: 15px; color: {c['muted']}; }}
 QFrame#card {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 10px; }}
-QFrame#actionInspector {{ background: {c['surface']}; border: none; border-left: 1px solid {c['border']}; }}
+QFrame#actionInspector {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 18px; }}
+QFrame#applicationCard, QFrame#applicationsEmpty {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 18px; }}
+QFrame#applicationCard QLabel, QFrame#applicationsEmpty QLabel {{ background: transparent; border: none; }}
+QLabel#applicationName {{ font-size: 15px; font-weight: 600; }}
+QLabel#applicationSummary {{ color: {c['muted']}; font-size: 12px; }}
+QLabel#applicationCount {{ background: {c['selected']}; color: {c['selected_text']}; border-radius: 12px; padding: 6px 12px; }}
 QFrame#device {{ background: #444449; border: 7px solid #515156; border-radius: 24px; }}
-QScrollArea#deviceScroll {{ background: {c['background']}; border: none; }}
-QScrollArea#deviceScroll > QWidget > QWidget {{ background: {c['background']}; }}
+QScrollArea#deviceScroll, QScrollArea#editorScroll {{ background: {c['background']}; border: none; }}
+QScrollArea#deviceScroll > QWidget > QWidget, QScrollArea#editorScroll > QWidget > QWidget {{ background: {c['background']}; }}
+QScrollArea#applicationsScroll, QScrollArea#applicationsScroll > QWidget > QWidget {{ background: {c['background']}; border: none; }}
+QScrollArea#applicationsScroll QScrollBar:vertical {{ background: transparent; width: 8px; margin: 3px 0; }}
+QScrollArea#applicationsScroll QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 4px; min-height: 32px; }}
+QScrollArea#applicationsScroll QScrollBar::handle:vertical:hover {{ background: {c['muted']}; }}
+QScrollArea#applicationsScroll QScrollBar::add-line:vertical, QScrollArea#applicationsScroll QScrollBar::sub-line:vertical {{ height: 0; border: none; background: transparent; }}
+QScrollArea#applicationsScroll QScrollBar::add-page:vertical, QScrollArea#applicationsScroll QScrollBar::sub-page:vertical {{ background: transparent; }}
 QListWidget#navigation {{ background: {c['sidebar']}; border: none; padding: 16px 8px; outline: 0; }}
 QListWidget#navigation::item {{ padding: 12px 14px; margin: 4px 0; border-radius: 5px; }}
 QListWidget#navigation::item:hover {{ background: {c['hover']}; }}
@@ -94,6 +106,11 @@ QToolButton#profileChip:focus {{ border-color: {c['focus']}; }}
 QComboBox, QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox {{ background: {c['control']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 8px; selection-background-color: {c['selected']}; selection-color: {c['selected_text']}; }}
 QComboBox:focus, QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border-color: {c['focus']}; }}
 QComboBox:disabled, QLineEdit:disabled {{ color: {c['disabled_text']}; background: {c['disabled']}; }}
+QLineEdit#applicationSearch {{ border-radius: 12px; padding: 11px 14px; }}
+QComboBox#applicationProfile {{ border-radius: 10px; padding: 8px 28px 8px 11px; }}
+QComboBox#applicationProfile::drop-down {{ border: none; width: 24px; background: transparent; }}
+QComboBox#applicationProfile::down-arrow {{ image: none; }}
+QPushButton#applicationAction {{ border-radius: 10px; padding: 9px 12px; }}
 QAbstractItemView {{ background: {c['control']}; alternate-background-color: {c['alternate']}; border: 1px solid {c['border']}; selection-background-color: {c['selected']}; selection-color: {c['selected_text']}; }}
 QTableWidget {{ gridline-color: {c['border']}; }}
 QHeaderView::section {{ background: {c['alternate']}; border: none; padding: 10px; font-weight: 600; }}
