@@ -17,10 +17,12 @@ required = {
     "./usr/lib/mx-creative-control/mxcc-worker",
     "./usr/lib/mx-creative-control/setup-permissions",
     "./usr/lib/mx-creative-control/python/mxcc/__main__.py",
+    "./usr/lib/mx-creative-control/python/mxcc/appearance.py",
     "./usr/lib/udev/rules.d/70-mx-creative-control.rules",
     "./usr/lib/systemd/user/mx-creative-control.service",
     "./usr/share/polkit-1/actions/org.mxcreativecontrol.setup-permissions.policy",
     "./usr/share/applications/mx-creative-control.desktop",
+    "./usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg",
     "./usr/share/mx-creative-control/shortcuts/config/default.json",
 }
 process = subprocess.Popen(["dpkg-deb", "--fsys-tarfile", str(package)], stdout=subprocess.PIPE)
@@ -57,34 +59,64 @@ with tempfile.TemporaryDirectory(prefix="mxcc-package-check-") as directory:
 import json
 import sys
 sys.path.insert(0, sys.argv[1])
-from PySide6.QtCore import qVersion
-from PySide6.QtGui import QImage
+from PySide6.QtCore import Qt, qVersion
+from PySide6.QtGui import QIcon, QImage, QPalette
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QWidget
 import mxcc
 from mxcc.gui import MainWindow
-from mxcc.paths import runtime_path
+from mxcc.configuration import default_settings
+from mxcc.paths import runtime_path, settings_path
 app = QApplication([])
 widget = QWidget()
 server = QLocalServer()
 assert qVersion() == '6.10.2', qVersion()
 assert QSvgRenderer(b'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>').isValid()
+assert QSvgRenderer(sys.argv[3]).isValid()
+app.setWindowIcon(QIcon(sys.argv[3]))
+assert not app.windowIcon().pixmap(64, 64).isNull()
 image = QImage(72, 72, QImage.Format.Format_RGB32)
 image.fill(0)
 assert image.save(sys.argv[2], 'JPEG')
+# Existing version-1 settings must acquire the system theme without losing keys.
+legacy = default_settings([])
+legacy.pop('theme', None)
+settings_path().parent.mkdir(parents=True, exist_ok=True)
+settings_path().write_text(json.dumps(legacy))
 window = MainWindow(connect_worker=False, applications=[])
 window.show()
 app.processEvents()
+assert not window.windowIcon().pixmap(64, 64).isNull()
+assert json.loads(settings_path().read_text())['theme'] == 'system'
+assert window.settings['launchers'] == legacy['launchers']
 compiled = json.loads(runtime_path().read_text())
 assert len(compiled['pages']) == 2
 assert all(len(page['keys']) == 9 for page in compiled['pages'])
 assert not window.timer.isActive()
+original_runtime = runtime_path().read_bytes()
+for mode in ('light', 'dark', 'system'):
+    index = window.theme_combo.findData(mode)
+    assert index >= 0, mode
+    window.theme_combo.setCurrentIndex(index)
+    app.processEvents()
+    assert window.appearance.preference == mode
+    assert json.loads(settings_path().read_text())['theme'] == mode
+    if mode != 'system':
+        assert window.appearance.effective_theme == mode
+        assert (app.palette().color(QPalette.ColorRole.Window).lightness() < 128) == (mode == 'dark')
+# Exercise the real Qt notification path without changing desktop preferences.
+for scheme, expected in ((Qt.ColorScheme.Dark, 'dark'), (Qt.ColorScheme.Light, 'light')):
+    app.styleHints().colorSchemeChanged.emit(scheme)
+    app.processEvents()
+    assert window.appearance.effective_theme == expected
+assert runtime_path().read_bytes() == original_runtime
 window.close()
 app.processEvents()
-print('Bundled settings window, compiled runtime, Qt SVG and JPEG smoke: OK')
+print('Bundled settings, theme migration/modes, canonical icon, runtime and Qt image smoke: OK')
 """
-    subprocess.run(["/usr/bin/python3", "-I", "-c", smoke, str(private), str(root / "face.jpg")],
+    icon = root / "usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg"
+    subprocess.run(["/usr/bin/python3", "-I", "-c", smoke, str(private), str(root / "face.jpg"), str(icon)],
                    env=environment, check=True)
     subprocess.run([str(root / "usr/lib/mx-creative-control/mxcc-worker"), "--check-config",
                     str(root / "config/mx-creative-control/runtime.json")],

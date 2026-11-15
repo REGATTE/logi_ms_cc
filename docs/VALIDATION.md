@@ -4,7 +4,7 @@ Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046
 
 ## Automated checks
 
-- 76 Python tests: discovery precedence and desktop IDs, profile validation and atomic imports, settings compilation, original-icon and icons-only fallback rendering, real Qt editor/import/export interactions, portable configuration, private runtime directories, permission-dialog cancellation/authorization routing, window activation recovery and user-service startup.
+- 91 Python tests: discovery precedence and desktop IDs, profile validation and atomic imports, settings compilation, original-icon and icons-only fallback rendering, real Qt editor/import/export interactions, portable configuration, private runtime directories, permission-dialog cancellation/authorization routing, window activation recovery, user-service startup, appearance persistence and live system-theme changes.
 - 14 Rust tests cover HID packet framing and captured acknowledgments, key press edges, shortcut parsing, config validation, page/profile state, private bounded Unix IPC and simulated queue-full recovery.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
 - Package inspection verifies root-owned files, safe modes, the fixed permission helper and policy, original bundled Qt runtime, an actual offscreen settings window and Python-to-Rust runtime validation.
@@ -23,6 +23,8 @@ Tests run without opening hardware. The package smoke extracts into a temporary 
 - Icons-only is the initial setting and is also applied to this workstation's configuration.
 - Version 0.1.1 replaces the workstation's obsolete prototype launcher and synchronizes the physical Apps page every time settings opens. The user confirmed the keypad now matches the settings preview.
 - Recovery was verified with a real stopped worker: reopening the existing settings window started a new managed worker, reapplied the launcher layout and restored Apps page 0 without a display error. The source worker is active in its own user-session unit, separate from the settings process.
+- Version 0.1.2 adds two focused Rust tests for source/installed icon resolution and missing-artwork fallback. The live GNOME panel was visually checked: the mint keypad icon is visible, using the same SVG as the application window. D-Bus exposes the resolved absolute icon path.
+- The workstation prefers dark appearance; native Qt reports Dark, legacy configuration defaults to System, and the live window opens dark. Light/Dark overrides, system-change signals, dialog/popup palettes, import and persistence are tested. Changing appearance leaves the keypad runtime file unchanged.
 
 The GUI and worker run without root. Permission repair uses the packaged fixed helper through Ubuntu's polkit authentication. The privileged repair operation has been reviewed and its argument rejection tested; a package install/administrator dialog is not required for source testing when device access already exists.
 

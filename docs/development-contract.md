@@ -84,6 +84,9 @@ frontend provides Qt icon rendering, compiler does not import Qt.
 Settings: `version:1`, `launchers` nine entries (desktop ID, `"@screenshot"`,
 or null), `profile_assignments` map desktop ID to profile ID, `auto_switch`
 boolean, `start_at_login` boolean, `show_labels` boolean.
+The optional `theme` setting is `system` (default), `light`, or `dark`; legacy
+version-1 settings without it normalize to `system`. Appearance belongs to the
+Qt process and does not enter the Rust runtime or trigger keypad image uploads.
 
 ## Boundaries
 

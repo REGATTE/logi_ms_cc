@@ -11,6 +11,16 @@ from PySide6.QtWidgets import QApplication, QStyle
 from .paths import cache_dir
 
 
+def application_icon() -> QIcon:
+    """Use the same canonical artwork as the desktop launcher and Rust tray."""
+    source = Path(__file__).resolve().parents[2] / "packaging/mx-creative-control.svg"
+    installed = Path("/usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg")
+    for path in (source, installed):
+        if path.is_file():
+            return QIcon(str(path))
+    return QIcon.fromTheme("mx-creative-control")
+
+
 def setup_icon_theme() -> None:
     roots = [str(Path.home() / ".local/share/icons"), str(Path.home() / ".icons"),
              "/usr/local/share/icons", "/usr/share/icons", "/usr/share/pixmaps",

@@ -10,6 +10,7 @@ This is an independent community project, not Logitech's Logi Options+ software.
 
 - **Original app icons:** artwork comes from installed desktop entries and icon themes. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
 - **Small background worker:** Rust handles the keypad, virtual shortcut input, panel icon and X11 focus events. The native Qt settings window runs only while open.
+- **System, light or dark appearance:** follows your desktop by default, with an immediate override in Settings. The window and panel use the same keypad icon.
 - **Installed-app discovery:** scan standard desktop entries, Snap and Flatpak applications; assign apps or Screenshot to any launcher key.
 - **Editable shortcut profiles:** choose a profile, edit its nine actions in the UI, or import declarative JSON from `shortcuts/config/`.
 - **Automatic or manual pages:** the two physical arrow buttons switch Apps/Shortcuts. X11 supports automatic app matching; profiles can also be selected manually.
@@ -45,8 +46,8 @@ Fetch the pinned Qt runtime and locked Rust dependencies, then build and check t
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.1_amd64.deb
-sudo apt install ./dist/mx-creative-control_0.1.1_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.2_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.1.2_amd64.deb
 mx-creative-control
 ```
 
@@ -61,7 +62,7 @@ The app and worker run as your normal user. Installation or **Permissions → Se
 1. Under **Customize**, select a key, choose an installed app or Screenshot, choose a shortcut profile, and press **Apply to key**.
 2. Under **Applications**, use **Rescan** after installing an app. Assign a profile, import a JSON file, or edit shortcuts directly.
 3. Use the keypad's arrow buttons for Apps/Shortcuts. Choose **Use preview on keypad** for a manual profile or **Follow active app** for automatic X11 matching.
-4. Under **Settings**, enable labels or sign-in startup if wanted. Export the configuration to move your layout and profiles to another PC.
+4. Under **Settings → Appearance**, choose **System setting**, **Light**, or **Dark**. System setting follows desktop changes automatically. Settings also controls labels, sign-in startup and configuration export.
 
 First-run slots target ChatGPT, VS Code, Lark, Firefox, Warp and Screenshot. Missing applications leave empty keys. A browser shortcut/PWA must provide a desktop entry to appear in discovery. ChatGPT and Lark profiles contain conventional editing actions; app-specific bindings can be added in the editor.
 

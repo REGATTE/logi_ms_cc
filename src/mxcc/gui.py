@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QStackedWidget, QTableWidget,
     QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
@@ -15,39 +15,13 @@ from PySide6.QtWidgets import (
 
 from . import __version__, ipc, service
 from .applications import discover_applications
+from .appearance import AppearanceController
 from .configuration import compile_runtime, load_settings, profile_for_app, save_settings
 from .icons import FaceRenderer, display_icon, setup_icon_theme
 from .paths import cache_dir, profiles_dir, runtime_path
 from .profile_editor import ProfileEditor
 from .profiles import ProfileExistsError, atomic_json, import_profile, load_profiles
 from .transfer import export_bundle, read_bundle, write_imported_profiles
-
-
-STYLE = """
-QMainWindow, QWidget#workspace { background: #f5f5f8; color: #252432; }
-QWidget { font-family: 'Inter', 'DejaVu Sans'; font-size: 13px; color: #252432; }
-QLabel#title { font-size: 25px; font-weight: 600; }
-QLabel#section { font-size: 16px; font-weight: 600; }
-QLabel#muted { color: #74717f; }
-QLabel#status { color: #615a75; padding: 6px; }
-QFrame#card { background: white; border: 1px solid #e4e1ea; border-radius: 14px; }
-QFrame#device { background: #34333a; border: 8px solid #44434a; border-radius: 22px; }
-QListWidget#navigation { background: #eeedf3; border: none; padding: 12px; outline: 0; }
-QListWidget#navigation::item { padding: 14px 10px; margin: 3px 0; border-radius: 9px; }
-QListWidget#navigation::item:selected { background: #ded4f8; color: #5e368d; }
-QPushButton { background: white; border: 1px solid #d8d3e1; border-radius: 7px; padding: 9px 13px; }
-QPushButton:hover { border-color: #9c76c9; background: #f6f0ff; }
-QPushButton:checked, QPushButton#primary { background: #7650b3; color: white; border-color: #7650b3; }
-QPushButton:disabled { color: #99939f; background: #eeedf0; }
-QComboBox, QLineEdit { background: white; border: 1px solid #d9d5e0; border-radius: 6px; padding: 8px; }
-QComboBox::drop-down { border: none; width: 24px; }
-QToolButton#key { background: #202126; color: white; border: 2px solid #49484d; border-radius: 10px; }
-QToolButton#key:checked { border: 3px solid #ba94ef; }
-QToolButton#key:hover { border-color: #c9b6e8; }
-QTableWidget { background: white; alternate-background-color: #faf9fc; border: 1px solid #e1dde8; gridline-color: #eeebf2; }
-QHeaderView::section { background: #eeedf3; border: none; padding: 9px; font-weight: 600; }
-QCheckBox { spacing: 10px; padding: 5px 0; }
-"""
 
 
 def label(text: str, kind: str = "", wrap: bool = False) -> QLabel:
@@ -73,6 +47,8 @@ class MainWindow(QMainWindow):
         self.apps = discover_applications() if applications is None else list(applications)
         self.profiles = load_profiles()
         self.settings = load_settings(self.apps)
+        self.appearance = AppearanceController(QApplication.instance(), parent=self)
+        self.appearance.set_preference(self.settings["theme"])
         self.runtime = {}
         self.selected_slot = 0
         self.page = 0
@@ -83,7 +59,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MX Creative Control")
         self.resize(1110, 780)
         self.setMinimumSize(970, 710)
-        self.setStyleSheet(STYLE)
         root = QWidget()
         root.setObjectName("workspace")
         self.setCentralWidget(root)
@@ -263,6 +238,18 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 24, 0, 0)
+        layout.addWidget(label("Appearance", "section"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.setAccessibleName("Appearance")
+        for title, value in (("System setting", "system"), ("Light", "light"), ("Dark", "dark")):
+            self.theme_combo.addItem(title, value)
+        self.theme_combo.setCurrentIndex(self.theme_combo.findData(self.settings["theme"]))
+        self.theme_combo.currentIndexChanged.connect(self.change_theme)
+        appearance_form = QFormLayout()
+        appearance_form.addRow("Theme", self.theme_combo)
+        layout.addLayout(appearance_form)
+        layout.addWidget(label("System setting follows your desktop’s light or dark appearance.", "muted", True))
+        layout.addSpacing(16)
         layout.addWidget(label("Background & configuration", "section"))
         self.start_at_login = QCheckBox("Start the keypad worker when I sign in")
         self.start_at_login.setChecked(self.settings["start_at_login"])
@@ -480,7 +467,7 @@ class MainWindow(QMainWindow):
         if application is None:
             QMessageBox.information(self, "Choose an application", "Choose an application first, or use the Applications page.")
             return
-        filename, _ = QFileDialog.getOpenFileName(self, "Import shortcut profile", "", "Shortcut profiles (*.json)")
+        filename, _ = QFileDialog.getOpenFileName(self, "Import shortcut profile", "", "Shortcut profiles (*.json)", "", QFileDialog.Option.DontUseNativeDialog)
         if not filename:
             return
         try:
@@ -522,6 +509,22 @@ class MainWindow(QMainWindow):
         self.settings[key] = value
         self.safe_save()
 
+    def change_theme(self, *_):
+        """Appearance is a UI preference; never upload keypad images for it."""
+        theme = self.theme_combo.currentData()
+        candidate = {**self.settings, "theme": theme}
+        try:
+            save_settings(candidate)
+        except (OSError, ValueError) as exc:
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(self.theme_combo.findData(self.settings["theme"]))
+            self.theme_combo.blockSignals(False)
+            QMessageBox.warning(self, "Could not save appearance", str(exc))
+            return
+        self.settings = candidate
+        self.appearance.set_preference(theme)
+        self.notice.setText("Appearance saved.")
+
     def change_autostart(self, enabled):
         try:
             service.set_autostart(enabled)
@@ -533,7 +536,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Automatic startup", str(exc))
 
     def export_configuration(self):
-        filename, _ = QFileDialog.getSaveFileName(self, "Export configuration", "mx-creative-control.json", "Configuration (*.json)")
+        filename, _ = QFileDialog.getSaveFileName(self, "Export configuration", "mx-creative-control.json", "Configuration (*.json)", "", QFileDialog.Option.DontUseNativeDialog)
         if filename:
             try:
                 export_bundle(Path(filename), self.settings, self.profiles)
@@ -542,7 +545,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Export failed", str(exc))
 
     def import_configuration(self):
-        filename, _ = QFileDialog.getOpenFileName(self, "Import configuration", "", "Configuration (*.json)")
+        filename, _ = QFileDialog.getOpenFileName(self, "Import configuration", "", "Configuration (*.json)", "", QFileDialog.Option.DontUseNativeDialog)
         if not filename:
             return
         try:
@@ -554,6 +557,10 @@ class MainWindow(QMainWindow):
             compile_runtime(settings, self.apps, profiles, FaceRenderer(settings["show_labels"]))
             write_imported_profiles(profiles)
             self.settings = settings
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(self.theme_combo.findData(settings["theme"]))
+            self.theme_combo.blockSignals(False)
+            self.appearance.set_preference(settings["theme"])
             self.profiles = load_profiles()
             for checkbox, name in ((self.auto_switch, "auto_switch"), (self.show_labels, "show_labels")):
                 checkbox.blockSignals(True)

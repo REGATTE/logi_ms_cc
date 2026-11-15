@@ -10,7 +10,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.1.1_amd64.deb
+sudo apt install ./mx-creative-control_0.1.2_amd64.deb
 mx-creative-control
 ```
 
@@ -31,6 +31,12 @@ starts the Qt process; closing settings releases that process. Ubuntu's default
 GNOME session has AppIndicator support; other GNOME setups need an extension
 that displays StatusNotifier/AppIndicator tray icons. Settings remain available
 from the application launcher even if the desktop hides the tray.
+
+The panel icon matches the application's mint nine-key icon. Source checkouts
+resolve the SVG directly, so installing it into a global icon theme is not
+required. **Settings → Appearance → Theme** offers System setting (default),
+Light and Dark. System setting follows desktop appearance changes while the
+window is open; explicit choices persist across restarts.
 
 Opening or reopening settings also starts a stopped worker, reloads the saved
 layout and selects the Apps page on the physical keypad. Ubuntu supervises the
@@ -111,7 +117,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.1_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.2_amd64.deb
 python3 scripts/source-archive.py
 ```
 

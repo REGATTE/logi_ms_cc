@@ -11,11 +11,14 @@ from . import __version__
 def configure() -> int:
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication, QMessageBox
+    from .icons import application_icon
     from .paths import prepare_runtime_dir, socket_path
 
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("MX Creative Control")
+    app.setApplicationName("mx-creative-control")
+    app.setApplicationDisplayName("MX Creative Control")
     app.setDesktopFileName("mx-creative-control")
+    app.setWindowIcon(application_icon())
     socket = socket_path().with_name("settings.sock")
     try:
         prepare_runtime_dir()

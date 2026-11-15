@@ -21,6 +21,7 @@ def isolated_settings(monkeypatch, tmp_path):
 
 def test_portable_configuration_round_trip(isolated_settings, tmp_path):
     settings, profiles = isolated_settings
+    settings["theme"] = "dark"
     settings["launchers"][0] = "not-installed-here.desktop"
     settings["profile_assignments"]["not-installed-here.desktop"] = "vscode"
     destination = tmp_path / "export.json"
@@ -32,6 +33,28 @@ def test_portable_configuration_round_trip(isolated_settings, tmp_path):
     write_imported_profiles(restored_profiles)
     assert {file.stem for file in paths.profiles_dir().glob("*.json")} == set(profiles)
     assert load_profiles() == profiles
+
+
+def test_legacy_export_without_theme_defaults_to_system(isolated_settings, tmp_path):
+    settings, profiles = isolated_settings
+    legacy = dict(settings)
+    legacy.pop("theme")
+    source = tmp_path / "legacy.json"
+    source.write_text(json.dumps({"version": 1, "settings": legacy, "profiles": list(profiles.values())}))
+
+    restored, restored_profiles = read_bundle(source)
+
+    assert restored == settings
+    assert restored["theme"] == "system"
+    assert restored_profiles == profiles
+
+
+def test_export_with_invalid_theme_is_rejected(isolated_settings, tmp_path):
+    settings, _ = isolated_settings
+    source = tmp_path / "invalid-theme.json"
+    source.write_text(json.dumps({"version": 1, "settings": settings | {"theme": "sepia"}, "profiles": []}))
+    with pytest.raises(ValueError, match="theme must be"):
+        read_bundle(source)
 
 
 @pytest.mark.parametrize("change", [

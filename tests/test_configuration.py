@@ -5,7 +5,7 @@ import pytest
 
 from mxcc import paths
 from mxcc.applications import Application
-from mxcc.configuration import ConfigurationError, compile_runtime, default_settings, load_settings, save_settings
+from mxcc.configuration import ConfigurationError, compile_runtime, default_settings, load_settings, save_settings, validate_settings
 from mxcc.profiles import load_profiles
 
 
@@ -20,6 +20,7 @@ def render(label, icon, application):
 def test_defaults_keep_requested_positions_without_inventing_installed_apps():
     settings = default_settings([app(), app("dev.warp.Warp.desktop", "Warp")])
     assert settings["launchers"] == [None, None, None, "firefox.desktop", "dev.warp.Warp.desktop", "@screenshot", None, None, None]
+    assert settings["theme"] == "system"
 
 
 def test_compile_two_pages_uses_original_icon_and_installed_apps(monkeypatch, tmp_path):
@@ -27,6 +28,7 @@ def test_compile_two_pages_uses_original_icon_and_installed_apps(monkeypatch, tm
     profiles = load_profiles()
     firefox = app()
     settings = default_settings([firefox])
+    settings["theme"] = "dark"
     settings["launchers"][0] = "missing.desktop"
     calls = []
     def record(label, icon, application):
@@ -42,6 +44,7 @@ def test_compile_two_pages_uses_original_icon_and_installed_apps(monkeypatch, tm
     assert ("New tab", "tab-new", None) in calls
     assert [profile["id"] for profile in runtime["profiles"]] == ["firefox"]
     assert runtime["pages"][1]["keys"][0]["action"] == {"type": "shortcut", "keys": "Ctrl+C"}
+    assert set(runtime) == {"version", "auto_switch", "pages", "profiles"}
 
 
 def test_manual_assignment_and_explicit_none(monkeypatch, tmp_path):
@@ -84,12 +87,14 @@ def test_renderer_cannot_escape_image_cache(filename):
         compile_runtime(default_settings([]), [], {}, lambda *_: filename)
 
 
-def test_settings_round_trip_and_invalid_save_preserves_previous(monkeypatch, tmp_path):
+@pytest.mark.parametrize("theme", ["system", "light", "dark"])
+def test_settings_round_trip_and_invalid_save_preserves_previous(monkeypatch, tmp_path, theme):
     path = tmp_path / "config/settings.json"
     monkeypatch.setattr(paths, "settings_path", lambda: path)
     settings = load_settings([app()])
     assert settings == default_settings([app()])
     assert not path.exists()
+    settings["theme"] = theme
     save_settings(settings)
     assert load_settings() == settings
     before = path.read_bytes()
@@ -99,6 +104,33 @@ def test_settings_round_trip_and_invalid_save_preserves_previous(monkeypatch, tm
     path.write_text("{broken")
     with pytest.raises(ConfigurationError, match="Cannot read settings"):
         load_settings()
+
+
+def test_legacy_v1_settings_gain_system_theme_without_rewriting_on_read(monkeypatch, tmp_path):
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(paths, "settings_path", lambda: path)
+    legacy = default_settings([app()])
+    legacy.pop("theme")
+    path.write_text(json.dumps(legacy))
+    original = path.read_bytes()
+
+    settings = load_settings()
+
+    assert settings == legacy | {"theme": "system"}
+    assert path.read_bytes() == original
+    save_settings(settings)
+    assert json.loads(path.read_text())["theme"] == "system"
+
+
+@pytest.mark.parametrize("theme", ["sepia", None, True, [], {}])
+def test_invalid_theme_is_rejected(theme):
+    with pytest.raises(ConfigurationError, match="theme must be"):
+        validate_settings(default_settings([]) | {"theme": theme})
+
+
+def test_theme_extension_does_not_allow_unknown_settings_fields():
+    with pytest.raises(ConfigurationError, match="unsupported fields"):
+        validate_settings(default_settings([]) | {"themes": "dark"})
 
 
 def test_failed_atomic_replace_keeps_previous_file(monkeypatch, tmp_path):

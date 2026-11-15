@@ -33,13 +33,23 @@ def default_settings(apps: Iterable[Application]) -> dict:
         if chosen is None:
             chosen = next((app.id for app in apps if app.name.casefold() in names), None)
         launchers.append(chosen)
-    return {"version": 1, "launchers": launchers + ["@screenshot", None, None, None], "profile_assignments": {}, "auto_switch": True, "start_at_login": False, "show_labels": False}
+    return {
+        "version": 1,
+        "launchers": launchers + ["@screenshot", None, None, None],
+        "profile_assignments": {},
+        "auto_switch": True,
+        "start_at_login": False,
+        "show_labels": False,
+        "theme": "system",
+    }
 
 
 def validate_settings(settings: object) -> dict:
     required = {"version", "launchers", "profile_assignments", "auto_switch", "start_at_login", "show_labels"}
-    if not isinstance(settings, dict) or set(settings) != required:
+    if not isinstance(settings, dict) or not required.issubset(settings):
         raise ConfigurationError("Settings must contain version, launchers, profile_assignments, auto_switch, start_at_login and show_labels")
+    if set(settings) - required - {"theme"}:
+        raise ConfigurationError("Settings contain unsupported fields")
     if type(settings["version"]) is not int or settings["version"] != 1:
         raise ConfigurationError("Settings version must be 1")
     launchers = settings["launchers"]
@@ -59,7 +69,11 @@ def validate_settings(settings: object) -> dict:
     for field in ("auto_switch", "start_at_login", "show_labels"):
         if type(settings[field]) is not bool:
             raise ConfigurationError(f"{field} must be true or false")
-    return {**settings, "launchers": list(launchers), "profile_assignments": dict(assignments)}
+    # Version 1 predates appearance settings; old files follow the system theme.
+    theme = settings.get("theme", "system")
+    if not isinstance(theme, str) or theme not in ("system", "light", "dark"):
+        raise ConfigurationError("theme must be system, light or dark")
+    return {**settings, "launchers": list(launchers), "profile_assignments": dict(assignments), "theme": theme}
 
 
 def load_settings(apps: Iterable[Application] | None = None) -> dict:
