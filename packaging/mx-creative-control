@@ -1,0 +1,7 @@
+#!/usr/bin/python3 -I
+"""Enter the private application runtime without importing user site packages."""
+import runpy
+import sys
+
+sys.path.insert(0, "/usr/lib/mx-creative-control/python")
+runpy.run_module("mxcc", run_name="__main__")

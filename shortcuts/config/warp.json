@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "warp",
+  "name": "Warp",
+  "desktop_ids": [
+    "dev.warp.Warp.desktop",
+    "warp-terminal.desktop",
+    "warp.desktop"
+  ],
+  "wm_classes": [
+    "dev.warp.Warp",
+    "warp",
+    "warp-terminal"
+  ],
+  "shortcuts": [
+    {
+      "slot": 1,
+      "label": "Commands",
+      "keys": "Ctrl+Shift+P",
+      "icon": "system-run"
+    },
+    {
+      "slot": 2,
+      "label": "History",
+      "keys": "Ctrl+R",
+      "icon": "document-open-recent"
+    },
+    {
+      "slot": 3,
+      "label": "New tab",
+      "keys": "Ctrl+Shift+T",
+      "icon": "tab-new"
+    },
+    {
+      "slot": 4,
+      "label": "Split right",
+      "keys": "Ctrl+Shift+D",
+      "icon": "view-split-left-right"
+    },
+    {
+      "slot": 5,
+      "label": "Split down",
+      "keys": "Ctrl+Shift+E",
+      "icon": "view-split-top-bottom"
+    },
+    {
+      "slot": 6,
+      "label": "Copy",
+      "keys": "Ctrl+Shift+C",
+      "icon": "edit-copy"
+    },
+    {
+      "slot": 7,
+      "label": "Paste",
+      "keys": "Ctrl+Shift+V",
+      "icon": "edit-paste"
+    },
+    {
+      "slot": 8,
+      "label": "Find output",
+      "keys": "Ctrl+Shift+F",
+      "icon": "edit-find"
+    },
+    {
+      "slot": 9,
+      "label": "Focus input",
+      "keys": "Ctrl+Shift+L",
+      "icon": "input-keyboard"
+    }
+  ]
+}

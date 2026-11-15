@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "firefox",
+  "name": "Firefox",
+  "desktop_ids": [
+    "firefox.desktop",
+    "firefox_firefox.desktop",
+    "org.mozilla.firefox.desktop"
+  ],
+  "wm_classes": [
+    "firefox",
+    "firefox_firefox"
+  ],
+  "shortcuts": [
+    {
+      "slot": 1,
+      "label": "New tab",
+      "keys": "Ctrl+T",
+      "icon": "tab-new"
+    },
+    {
+      "slot": 2,
+      "label": "Find",
+      "keys": "Ctrl+F",
+      "icon": "edit-find"
+    },
+    {
+      "slot": 3,
+      "label": "Address bar",
+      "keys": "Ctrl+L",
+      "icon": "edit-select-all"
+    },
+    {
+      "slot": 4,
+      "label": "Copy",
+      "keys": "Ctrl+C",
+      "icon": "edit-copy"
+    },
+    {
+      "slot": 5,
+      "label": "Paste",
+      "keys": "Ctrl+V",
+      "icon": "edit-paste"
+    },
+    {
+      "slot": 6,
+      "label": "Reload",
+      "keys": "Ctrl+R",
+      "icon": "view-refresh"
+    },
+    {
+      "slot": 7,
+      "label": "Back",
+      "keys": "Alt+Left",
+      "icon": "go-previous"
+    },
+    {
+      "slot": 8,
+      "label": "Next tab",
+      "keys": "Ctrl+PageDown",
+      "icon": "go-next"
+    },
+    {
+      "slot": 9,
+      "label": "Restore tab",
+      "keys": "Ctrl+Shift+T",
+      "icon": "edit-undo"
+    }
+  ]
+}

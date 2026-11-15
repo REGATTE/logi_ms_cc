@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    configure)
+        # Package installation is already privileged. Never enable a user unit here.
+        if [ -d /run/udev ]; then
+            /usr/lib/mx-creative-control/setup-permissions
+        fi
+        ;;
+esac

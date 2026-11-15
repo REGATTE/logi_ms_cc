@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MX Creative Control
+Comment=Configure your MX Creative Keypad
+Exec=mx-creative-control configure
+Icon=mx-creative-control
+Terminal=false
+Categories=Settings;HardwareSettings;
+StartupNotify=true
+StartupWMClass=mx-creative-control

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "default",
+  "name": "Everyday shortcuts",
+  "desktop_ids": [],
+  "wm_classes": [],
+  "shortcuts": [
+    {
+      "slot": 1,
+      "label": "Copy",
+      "keys": "Ctrl+C",
+      "icon": "edit-copy"
+    },
+    {
+      "slot": 2,
+      "label": "Paste",
+      "keys": "Ctrl+V",
+      "icon": "edit-paste"
+    },
+    {
+      "slot": 3,
+      "label": "Undo",
+      "keys": "Ctrl+Z",
+      "icon": "edit-undo"
+    },
+    {
+      "slot": 4,
+      "label": "Select all",
+      "keys": "Ctrl+A",
+      "icon": "edit-select-all"
+    },
+    {
+      "slot": 5,
+      "label": "Find",
+      "keys": "Ctrl+F",
+      "icon": "edit-find"
+    },
+    {
+      "slot": 6,
+      "label": "Screenshot",
+      "keys": "Print",
+      "icon": "applets-screenshooter"
+    },
+    {
+      "slot": 7,
+      "label": "Volume down",
+      "keys": "VolumeDown",
+      "icon": "audio-volume-low"
+    },
+    {
+      "slot": 8,
+      "label": "Mute",
+      "keys": "Mute",
+      "icon": "audio-volume-muted"
+    },
+    {
+      "slot": 9,
+      "label": "Volume up",
+      "keys": "VolumeUp",
+      "icon": "audio-volume-high"
+    }
+  ]
+}

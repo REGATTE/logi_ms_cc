@@ -1,0 +1,66 @@
+#!/usr/bin/python3 -I
+"""Fixed privileged operation; installed root-owned and called through pkexec.
+
+No command, path, username or environment-provided configuration is accepted.
+This helper never launches the settings UI or worker as root.
+"""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+RULE = b'''# Only the USB MX Creative Keypad. Active local seat receives the device ACL.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c354", TAG+="uaccess"
+# Needed to emit configured shortcut keys; does not read existing keyboards.
+SUBSYSTEM=="misc", KERNEL=="uinput", OPTIONS+="static_node=uinput", TAG+="uaccess"
+'''
+
+
+def main():
+    if len(sys.argv) != 1:
+        raise SystemExit("This helper accepts no arguments.")
+    if os.geteuid() != 0:
+        raise SystemExit("Run this helper through the app's administrator authentication dialog.")
+    os.umask(0o022)
+    destination = Path("/usr/lib/udev/rules.d/70-mx-creative-control.rules")
+    # Atomic replacement avoids following a destination symlink.
+    fd, temporary = tempfile.mkstemp(prefix=".mx-creative-control-", dir=destination.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(RULE)
+            os.fchmod(stream.fileno(), 0o644)
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
+
+    def run(*arguments):
+        subprocess.run(arguments, check=True, env=environment, stdin=subprocess.DEVNULL)
+
+    if not Path("/dev/uinput").exists():
+        run("/usr/sbin/modprobe", "uinput")
+    run("/usr/bin/udevadm", "control", "--reload-rules")
+    # Match the actual USB ancestor; do not re-trigger unrelated hidraw devices.
+    for device in Path("/sys/class/hidraw").glob("hidraw*"):
+        for ancestor in (device.resolve(), *device.resolve().parents):
+            try:
+                vendor = (ancestor / "idVendor").read_text().strip()
+                product = (ancestor / "idProduct").read_text().strip()
+            except OSError:
+                continue
+            if (vendor, product) == ("046d", "c354"):
+                run("/usr/bin/udevadm", "trigger", "--action=change", str(device))
+                break
+    run("/usr/bin/udevadm", "trigger", "--action=change", "--subsystem-match=misc", "--sysname-match=uinput")
+    run("/usr/bin/udevadm", "settle", "--timeout=10")
+    print("Keypad and shortcut permissions refreshed for the active desktop session.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"Permission setup failed: {error}") from error

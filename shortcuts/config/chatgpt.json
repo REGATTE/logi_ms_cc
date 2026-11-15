@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "chatgpt",
+  "name": "ChatGPT \u00b7 editing",
+  "desktop_ids": [
+    "chatgpt.desktop",
+    "com.openai.ChatGPT.desktop"
+  ],
+  "wm_classes": [
+    "chatgpt"
+  ],
+  "shortcuts": [
+    {
+      "slot": 1,
+      "label": "Copy",
+      "keys": "Ctrl+C",
+      "icon": "edit-copy"
+    },
+    {
+      "slot": 2,
+      "label": "Paste",
+      "keys": "Ctrl+V",
+      "icon": "edit-paste"
+    },
+    {
+      "slot": 3,
+      "label": "Undo",
+      "keys": "Ctrl+Z",
+      "icon": "edit-undo"
+    },
+    {
+      "slot": 4,
+      "label": "Select all",
+      "keys": "Ctrl+A",
+      "icon": "edit-select-all"
+    }
+  ]
+}

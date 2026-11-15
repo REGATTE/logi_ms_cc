@@ -1,0 +1,119 @@
+# MX Creative Control
+
+A lightweight Ubuntu app for the Logitech MX Creative **Keypad**. Launch your apps from its nine LCD keys, use their original icons, and switch to shortcuts for the app you are working in.
+
+![MX Creative Control settings window](docs/screenshots/settings.png)
+
+This is an independent community project, not Logitech's Logi Options+ software. The wireless dialpad is outside its scope.
+
+## Features
+
+- **Original app icons:** artwork comes from installed desktop entries and icon themes. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
+- **Small background worker:** Rust handles the keypad, virtual shortcut input, panel icon and X11 focus events. The native Qt settings window runs only while open.
+- **Installed-app discovery:** scan standard desktop entries, Snap and Flatpak applications; assign apps or Screenshot to any launcher key.
+- **Editable shortcut profiles:** choose a profile, edit its nine actions in the UI, or import declarative JSON from `shortcuts/config/`.
+- **Automatic or manual pages:** the two physical arrow buttons switch Apps/Shortcuts. X11 supports automatic app matching; profiles can also be selected manually.
+- **Portable settings and explicit permissions:** export/import layouts and profiles, opt into sign-in startup, and use Ubuntu's authentication dialog when device access needs repair.
+
+Closing settings leaves the worker running. Opening settings from the panel icon or app launcher reconnects it, reloads the layout and selects the Apps page. **Quit** in the panel menu stops the worker. One measured idle sample used about **5.5 MiB RAM** with settings closed; see [validation and resource measurements](docs/VALIDATION.md) for conditions and limits.
+
+## Requirements
+
+- **Validated target:** Ubuntu 24.04, amd64, with the keypad connected over USB (`046d:c354`).
+- **Building/development:** Python 3.12, Rust **1.89 or newer** with Cargo, Git, and the Ubuntu build dependencies below.
+- **Desktop:** X11 for automatic app switching. GNOME needs StatusNotifier/AppIndicator support to display the panel icon; settings also opens from the app launcher.
+- **Input access:** the active desktop user needs access to the keypad and `/dev/uinput`. The package supplies the rules and a fixed permission-repair helper.
+
+Other distributions, architectures and Ubuntu versions need separate validation. Shortcuts use physical US-layout key codes; adapt profiles for other layouts or custom application bindings.
+
+## Build and install
+
+The repository contains source and packaging tools. Built `.deb` files and `dist/` are not tracked; build the package before following the install command.
+
+Install Rust 1.89 or newer with Cargo, then prepare the Ubuntu build tools:
+
+```sh
+sudo apt install git build-essential pkg-config python3 python3-pip python3-venv \
+  libdbus-1-dev libudev-dev libx11-dev dpkg-dev
+git clone https://github.com/REGATTE/logi_ms_cc.git
+cd logi_ms_cc
+```
+
+Fetch the pinned Qt runtime and locked Rust dependencies, then build and check the package:
+
+```sh
+scripts/prepare-runtime.sh --download
+cargo fetch --locked --manifest-path worker/Cargo.toml
+scripts/build-deb.sh
+python3 scripts/check-package.py dist/mx-creative-control_0.1.1_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.1.1_amd64.deb
+mx-creative-control
+```
+
+The package bundles PySide6-Essentials and Shiboken **6.10.2** privately. Installation needs no pip setup; apt installs declared Ubuntu system dependencies. After the fetch steps, package assembly uses local inputs with Cargo's lockfile in offline mode. Copy the built `.deb` to another Ubuntu 24.04 amd64 PC to install it there. [Installation details](docs/INSTALL.md) cover offline requirements, permissions, services and removal.
+
+Connect the keypad, install the applications you want to launch, and open **MX Creative Control**. Close other controllers such as OpenLogi or Solaar before using it so they do not compete for the keypad.
+
+The app and worker run as your normal user. Installation or **Permissions → Set up device permissions** requires administrator authentication. `/dev/uinput` access also lets other programs running as that user create virtual input devices; the dialog explains this access. Permission repair uses the installed root-owned helper, never a script from a writable checkout.
+
+## Configure the keypad
+
+1. Under **Customize**, select a key, choose an installed app or Screenshot, choose a shortcut profile, and press **Apply to key**.
+2. Under **Applications**, use **Rescan** after installing an app. Assign a profile, import a JSON file, or edit shortcuts directly.
+3. Use the keypad's arrow buttons for Apps/Shortcuts. Choose **Use preview on keypad** for a manual profile or **Follow active app** for automatic X11 matching.
+4. Under **Settings**, enable labels or sign-in startup if wanted. Export the configuration to move your layout and profiles to another PC.
+
+First-run slots target ChatGPT, VS Code, Lark, Firefox, Warp and Screenshot. Missing applications leave empty keys. A browser shortcut/PWA must provide a desktop entry to appear in discovery. ChatGPT and Lark profiles contain conventional editing actions; app-specific bindings can be added in the editor.
+
+Bundled profiles are in [`shortcuts/config/`](shortcuts/config/). User profiles belong in:
+
+```text
+~/.config/mx-creative-control/shortcuts/config/
+```
+
+`XDG_CONFIG_HOME` is respected. Import a new file through the app, or copy it into that directory and rescan. Profiles contain labels, icon names and key combinations; they cannot contain scripts or shell commands. See [the JSON format and example](docs/PROFILES.md) and [shortcut references](shortcuts/README.md). When moving settings, desktop IDs can differ between Snap, Flatpak and distro installations; reassign the corresponding installed app where needed. Original artwork is resolved on the destination PC.
+
+## Develop and test
+
+From the cloned repository, using the requirements above:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
+cargo build --manifest-path worker/Cargo.toml --locked
+MXCC_WORKER="$PWD/worker/target/debug/mxcc-worker" scripts/run-dev.sh
+```
+
+Source runs need the same desktop libraries and device permissions as an installed package. The permission-repair dialog becomes available after package installation. Quit an already running tray worker before testing a rebuilt worker. `scripts/run-dev.sh` selects the checkout's virtual environment; the worker remains independent of the settings process under Ubuntu's user-session service manager.
+
+```sh
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest
+cargo test --manifest-path worker/Cargo.toml --locked
+cargo fmt --manifest-path worker/Cargo.toml --check
+cargo clippy --manifest-path worker/Cargo.toml --all-targets --locked -- -D warnings
+```
+
+Automated tests do not access hardware. They cover app discovery, profiles and imports, runtime compilation, real offscreen Qt interactions, permission routing, worker recovery, HID packets, shortcut keys and private IPC. [VALIDATION.md](docs/VALIDATION.md) records separate physical-device checks and current limitations. To produce a clean source archive, run `python3 scripts/source-archive.py`.
+
+## Current limits
+
+- Wayland supports app launching, virtual shortcut input and manual profiles; automatic focused-app detection is not implemented. Use an X11 session if automatic matching is required.
+- Only the MX Creative Keypad is supported. The dialpad is not managed by this application.
+- Applications must expose desktop entries to be discovered. Profiles assume default app shortcuts, which can vary by version, focused widget or user configuration.
+- Validation covers one Ubuntu 24.04 amd64 workstation and physical keypad. Other environments need testing before being treated as supported.
+
+## Repository layout
+
+```text
+src/mxcc/          Qt settings, discovery, profiles, runtime configuration
+worker/            Rust keypad worker, input, focus tracking, tray and IPC
+shortcuts/config/  Bundled JSON shortcut profiles
+packaging/         Desktop entry, service, permissions and runtime notices
+scripts/           Development launcher, package checks and build tools
+tests/             Python and offscreen GUI tests
+docs/              Installation, profiles, interface contract and validation
+```
+
+## License and attribution
+
+Project code is [MIT licensed](LICENSE). The reverse-engineered keypad protocol builds on OpenLogi and `node-logitech-mx-creative-console`; their notices and attribution are in [worker/THIRD_PARTY.md](worker/THIRD_PARTY.md). Qt and Shiboken retain their upstream licenses, documented in [packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md). Installed app icons and trademarks belong to their respective owners.

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    remove|purge)
+        if [ -x /usr/bin/udevadm ] && [ -d /run/udev ]; then
+            /usr/bin/udevadm control --reload-rules || true
+        fi
+        ;;
+esac

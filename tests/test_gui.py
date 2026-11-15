@@ -1,0 +1,308 @@
+"""Exercise real Qt widgets without a display, worker, or user configuration."""
+
+import json
+import os
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import Mock, call
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6")
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QImage
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+
+from mxcc import gui, paths
+from mxcc.applications import Application
+from mxcc.icons import FaceRenderer
+from mxcc.profile_editor import ProfileEditor
+from mxcc.profiles import load_profiles
+
+_APP = None
+
+
+@pytest.fixture
+def isolated_qt(monkeypatch, tmp_path):
+    global _APP
+    for name in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "XDG_DATA_DIRS"):
+        directory = tmp_path / name.lower()
+        directory.mkdir(mode=0o700)
+        monkeypatch.setenv(name, str(directory))
+    monkeypatch.delenv("MXCC_BUNDLED_PROFILES", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    _APP = QApplication.instance() or QApplication(["mxcc-test"])
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _, title, message: warnings.append((title, message)))
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    def forbid_worker(*args, **kwargs):
+        raise AssertionError("GUI tests must not contact or start a hardware worker")
+    monkeypatch.setattr(gui.ipc, "request", forbid_worker)
+    monkeypatch.setattr(gui.service, "ensure_running", forbid_worker)
+    monkeypatch.setattr(gui.service, "set_autostart", forbid_worker)
+    yield _APP, warnings
+    for widget in QApplication.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    _APP.processEvents()
+
+
+@pytest.fixture
+def installed_app(isolated_qt, tmp_path):
+    icon = QImage(64, 64, QImage.Format.Format_RGB32)
+    icon.fill(QColor("#db2424"))
+    path = tmp_path / "original.png"
+    assert icon.save(str(path))
+    return Application("editor.desktop", "Editor", str(path), "editor %U", "Editor", tmp_path / "editor.desktop")
+
+
+def custom_profile(profile_id="editor"):
+    return {"version": 1, "id": profile_id, "name": "Editor actions", "desktop_ids": ["editor.desktop"], "wm_classes": ["Editor"], "shortcuts": [{"slot": 1, "label": "Save", "keys": "Ctrl+S", "icon": "document-save"}]}
+
+
+def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app):
+    _, warnings = isolated_qt
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.show()
+    window.select_key(6)
+    window.app_combo.setCurrentIndex(window.app_combo.findData(installed_app.id))
+    QTest.mouseClick(window.apply_button, Qt.MouseButton.LeftButton)
+    assert not warnings
+    assert window.key_buttons[6].toolTip() == "Editor"
+    settings = json.loads(paths.settings_path().read_text())
+    assert settings["launchers"][6] == "editor.desktop"
+    key = json.loads(paths.runtime_path().read_text())["pages"][0]["keys"][6]
+    assert key["action"] == {"type": "launch", "desktop_id": "editor.desktop"}
+    image_path = paths.cache_dir() / key["image"]
+    assert image_path.read_bytes().startswith(b"\xff\xd8")
+    image = QImage(str(image_path))
+    assert (image.width(), image.height()) == (118, 118)
+    color = image.pixelColor(59, 47)
+    assert color.red() > 180 and color.green() < 70 and color.blue() < 70
+    assert not window.timer.isActive()
+
+
+def test_renderer_caches_original_artwork_and_label_preference(isolated_qt, installed_app):
+    with_labels = FaceRenderer(True)
+    first = with_labels("Editor", "unavailable-icon", installed_app)
+    assert with_labels("Editor", "unavailable-icon", installed_app) == first
+    second = FaceRenderer(False)("Editor", "unavailable-icon", installed_app)
+    assert second != first
+    assert QImage(str(paths.cache_dir() / second)).size().width() == 118
+
+
+def test_icons_only_never_renders_names_when_artwork_is_missing(isolated_qt):
+    renderer = FaceRenderer(False)
+    missing = "mxcc-intentionally-missing-test-icon"
+    assert renderer("First app", missing) == renderer("Different app", missing)
+    assert FaceRenderer(True)("First app", missing) != renderer("First app", missing)
+
+
+def test_shortcut_import_assigns_profile_and_can_disable_it(isolated_qt, installed_app, monkeypatch, tmp_path):
+    _, warnings = isolated_qt
+    source = tmp_path / "editor.json"
+    source.write_text(json.dumps(custom_profile()))
+    monkeypatch.setattr(gui.QFileDialog, "getOpenFileName", lambda *_: (str(source), ""))
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.import_shortcuts(application=installed_app)
+    assert not warnings
+    assert window.settings["profile_assignments"][installed_app.id] == "editor"
+    assert window.app_table.cellWidget(0, 1).currentData() == "editor"
+    assert window.runtime["profiles"][0]["page"]["keys"][0]["action"] == {"type": "shortcut", "keys": "Ctrl+S"}
+    combo = window.app_table.cellWidget(0, 1)
+    combo.setCurrentIndex(combo.findData(None))
+    assert window.settings["profile_assignments"][installed_app.id] is None
+    assert window.runtime["profiles"] == []
+
+
+def test_existing_profile_import_requires_confirmed_replacement(isolated_qt, installed_app, monkeypatch, tmp_path):
+    _, warnings = isolated_qt
+    source = tmp_path / "firefox.json"
+    source.write_text(json.dumps(custom_profile("firefox")))
+    monkeypatch.setattr(gui.QFileDialog, "getOpenFileName", lambda *_: (str(source), ""))
+    questions = []
+    def confirm(*args):
+        questions.append(args[1])
+        return QMessageBox.StandardButton.Yes
+    monkeypatch.setattr(QMessageBox, "question", confirm)
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.import_shortcuts(application=installed_app)
+    assert questions == ["Replace shortcut profile?"]
+    assert not warnings
+    assert load_profiles()["firefox"]["name"] == "Editor actions"
+
+
+def test_profile_editor_saves_normalized_shortcuts_and_rejects_partial_row(isolated_qt, installed_app):
+    _, warnings = isolated_qt
+    editor = ProfileEditor(installed_app, None)
+    editor.name.setText("My editor")
+    editor.table.item(0, 0).setText("Save")
+    editor.table.item(0, 1).setText("control+s")
+    editor.save()
+    assert editor.result() == QDialog.DialogCode.Accepted
+    assert editor.result_profile["shortcuts"][0]["keys"] == "Ctrl+S"
+    assert (paths.profiles_dir() / (editor.result_profile["id"] + ".json")).exists()
+    broken = ProfileEditor(installed_app, editor.result_profile)
+    broken.table.item(0, 1).setText("")
+    broken.save()
+    assert broken.result_profile is None
+    assert warnings[-1][0] == "Profile could not be saved"
+    assert load_profiles()[editor.result_profile["id"]]["shortcuts"][0]["keys"] == "Ctrl+S"
+
+
+@pytest.mark.parametrize(("preview_id", "expected_app_id"), [("vscode", "code.desktop"), ("default", None)])
+def test_editing_preview_uses_its_profile_without_reassigning_launcher(isolated_qt, installed_app, monkeypatch, preview_id, expected_app_id):
+    _, warnings = isolated_qt
+    chatgpt = replace(installed_app, id="chatgpt.desktop", name="ChatGPT", wm_class="ChatGPT")
+    code = replace(installed_app, id="code.desktop", name="VS Code", wm_class="code")
+    window = gui.MainWindow(connect_worker=False, applications=[chatgpt, code])
+    assert window.selected_app().id == "chatgpt.desktop"
+    window.change_page(1)
+    window.preview_profile.setCurrentIndex(window.preview_profile.findData(preview_id))
+    captured = []
+    def edit_and_save(editor):
+        captured.append((editor.application.id if editor.application else None, editor.profile["id"]))
+        editor.name.setText("Edited preview")
+        editor.save()
+        return editor.result()
+    monkeypatch.setattr(ProfileEditor, "exec", edit_and_save)
+    window.edit_shortcuts()
+    assert captured == [(expected_app_id, preview_id)]
+    assert not warnings
+    assert window.settings["profile_assignments"] == {}
+    assert load_profiles()[preview_id]["name"] == "Edited preview"
+
+
+def test_window_export_import_restores_layout_but_keeps_local_startup_preference(isolated_qt, installed_app, monkeypatch, tmp_path):
+    _, warnings = isolated_qt
+    source = tmp_path / "portable.json"
+    monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *_: (str(source), ""))
+    monkeypatch.setattr(gui.QFileDialog, "getOpenFileName", lambda *_: (str(source), ""))
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.export_configuration()
+    bundle = json.loads(source.read_text())
+    bundle["settings"]["launchers"][8] = installed_app.id
+    bundle["settings"].update(auto_switch=False, show_labels=False, start_at_login=True)
+    source.write_text(json.dumps(bundle))
+    window.import_configuration()
+    assert not warnings
+    assert window.settings["launchers"][8] == installed_app.id
+    assert window.runtime["pages"][0]["keys"][8]["label"] == "Editor"
+    assert not window.auto_switch.isChecked()
+    assert not window.show_labels.isChecked()
+    assert not window.start_at_login.isChecked()
+    assert not window.settings["start_at_login"]
+
+
+def test_permission_dialog_requires_consent_and_launches_only_fixed_helper(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    helper = Path("/usr/lib/mx-creative-control/setup-permissions")
+    real_is_file = Path.is_file
+    monkeypatch.setattr(Path, "is_file", lambda path: True if path == helper else real_is_file(path))
+    process = Mock()
+    process_factory = Mock(return_value=process)
+    monkeypatch.setattr(gui, "QProcess", process_factory)
+    question = Mock(side_effect=[QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Ok])
+    monkeypatch.setattr(QMessageBox, "question", question)
+
+    window.setup_permissions()
+    process_factory.assert_not_called()
+    assert window.repair_button.isEnabled()
+    assert "/dev/uinput" in question.call_args.args[2]
+    assert "administrator authentication" in question.call_args.args[2]
+
+    window.setup_permissions()
+    process_factory.assert_called_once_with(window)
+    process.start.assert_called_once_with("/usr/bin/pkexec", [str(helper)])
+    assert not window.repair_button.isEnabled()
+
+    # A cancelled polkit prompt must leave setup available for another attempt.
+    finished_callback = process.finished.connect.call_args.args[0]
+    finished_callback(126, 0)
+    assert window.repair_button.isEnabled()
+    assert "cancelled" in window.notice.text()
+
+
+def connected_status():
+    return {"ok": True, "connected": True, "keypad_access": True, "input_access": True,
+            "focus_supported": True, "tray_available": True, "active_app": "Editor", "paused": False}
+
+
+def test_window_startup_reloads_running_worker_and_selects_apps(isolated_qt, installed_app, monkeypatch):
+    application, warnings = isolated_qt
+    ensure = Mock(return_value=connected_status())
+    request = Mock(side_effect=[{"ok": True}, {"ok": True}, connected_status()])
+    monkeypatch.setattr(gui.service, "ensure_running", ensure)
+    monkeypatch.setattr(gui.ipc, "request", request)
+    window = gui.MainWindow(connect_worker=True, applications=[installed_app])
+    application.processEvents()
+    window.timer.stop()
+    ensure.assert_called_once_with()
+    assert request.call_args_list == [call("reload"), call("page", index=0), call("status")]
+    assert window.page == 0
+    assert window.page_buttons[0].isChecked()
+    assert window.connection.text() == "Keypad connected"
+    assert not warnings
+
+
+def test_reopening_existing_window_recovers_lost_worker(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.change_page(1)
+    window.connect_worker = True
+    request = Mock(side_effect=gui.ipc.WorkerUnavailable("worker socket disappeared"))
+    monkeypatch.setattr(gui.ipc, "request", request)
+    window.refresh_status()
+    assert window.connection.text() == "Worker not running"
+    assert "worker socket disappeared" in window.notice.text()
+    ensure = Mock(return_value=connected_status())
+    monkeypatch.setattr(gui.service, "ensure_running", ensure)
+    request.reset_mock(side_effect=True)
+    request.side_effect = [{"ok": True}, {"ok": True}, connected_status()]
+
+    window.activate_settings()
+
+    ensure.assert_called_once_with()
+    assert request.call_args_list == [call("reload"), call("page", index=0), call("status")]
+    assert window.page == 0
+    assert window.connection.text() == "Keypad connected"
+    assert window.permission_labels["keypad"].text() == "Ready"
+    assert window.notice.text() == ""
+
+
+@pytest.mark.parametrize("failure_stage", ["ensure", "reload"])
+def test_worker_startup_failure_surfaces_error_without_claiming_connected(isolated_qt, installed_app, monkeypatch, failure_stage):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app])
+    window.change_page(1)
+    window.connect_worker = True
+    error = "Another keypad controller owns the device" if failure_stage == "ensure" else "Runtime configuration could not be loaded"
+    ensure = Mock(return_value=connected_status())
+    request = Mock(return_value={"ok": False, "error": error})
+    if failure_stage == "ensure":
+        ensure.side_effect = RuntimeError(error)
+    monkeypatch.setattr(gui.service, "ensure_running", ensure)
+    monkeypatch.setattr(gui.ipc, "request", request)
+
+    window.start_worker()
+
+    assert window.connection.text() == "Keypad setup failed"
+    assert window.notice.text() == error
+    assert window.status == {}
+    assert window.page == 1
+    assert "Not checked" in window.permission_labels["keypad"].text()
+    if failure_stage == "ensure":
+        request.assert_not_called()
+    else:
+        request.assert_called_once_with("reload")
+    # Merely seeing a live process later does not mean it accepted this layout.
+    request.return_value = connected_status()
+    window.refresh_status()
+    assert window.connection.text() == "Layout not applied"
+    assert window.notice.text() == error
+
+    ensure.side_effect = None
+    window.start_worker()
+    assert window.connection.text() == "Keypad connected"
+    assert window.notice.text() == ""

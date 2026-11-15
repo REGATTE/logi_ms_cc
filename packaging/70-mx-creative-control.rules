@@ -1,0 +1,4 @@
+# Only the USB MX Creative Keypad. Active local seat receives the device ACL.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c354", TAG+="uaccess"
+# Needed to emit configured shortcut keys; does not read existing keyboards.
+SUBSYSTEM=="misc", KERNEL=="uinput", OPTIONS+="static_node=uinput", TAG+="uaccess"

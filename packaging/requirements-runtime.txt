@@ -1,0 +1,3 @@
+# Runtime wheels are private to this application; no global pip installation.
+PySide6-Essentials==6.10.2
+shiboken6==6.10.2

@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "vscode",
+  "name": "VS Code",
+  "desktop_ids": [
+    "code.desktop",
+    "code_code.desktop",
+    "com.visualstudio.code.desktop",
+    "codium.desktop"
+  ],
+  "wm_classes": [
+    "code",
+    "code-oss",
+    "vscodium"
+  ],
+  "shortcuts": [
+    {
+      "slot": 1,
+      "label": "Commands",
+      "keys": "Ctrl+Shift+P",
+      "icon": "system-run"
+    },
+    {
+      "slot": 2,
+      "label": "Open file",
+      "keys": "Ctrl+P",
+      "icon": "document-open"
+    },
+    {
+      "slot": 3,
+      "label": "Project search",
+      "keys": "Ctrl+Shift+F",
+      "icon": "edit-find"
+    },
+    {
+      "slot": 4,
+      "label": "Save",
+      "keys": "Ctrl+S",
+      "icon": "document-save"
+    },
+    {
+      "slot": 5,
+      "label": "Terminal",
+      "keys": "Ctrl+Grave",
+      "icon": "utilities-terminal"
+    },
+    {
+      "slot": 6,
+      "label": "Format",
+      "keys": "Ctrl+Shift+I",
+      "icon": "format-justify-fill"
+    },
+    {
+      "slot": 7,
+      "label": "Definition",
+      "keys": "F12",
+      "icon": "go-jump"
+    },
+    {
+      "slot": 8,
+      "label": "Sidebar",
+      "keys": "Ctrl+B",
+      "icon": "view-split-left-right"
+    },
+    {
+      "slot": 9,
+      "label": "Problems",
+      "keys": "Ctrl+Shift+M",
+      "icon": "dialog-warning"
+    }
+  ]
+}

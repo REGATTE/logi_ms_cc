@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "lark",
+  "name": "Lark \u00b7 editing",
+  "desktop_ids": [
+    "bytedance-lark.desktop",
+    "lark.desktop",
+    "com.larksuite.Lark.desktop"
+  ],
+  "wm_classes": [
+    "lark",
+    "bytedance-lark"
+  ],
+  "shortcuts": [
+    {
+      "slot": 1,
+      "label": "Copy",
+      "keys": "Ctrl+C",
+      "icon": "edit-copy"
+    },
+    {
+      "slot": 2,
+      "label": "Paste",
+      "keys": "Ctrl+V",
+      "icon": "edit-paste"
+    },
+    {
+      "slot": 3,
+      "label": "Undo",
+      "keys": "Ctrl+Z",
+      "icon": "edit-undo"
+    },
+    {
+      "slot": 4,
+      "label": "Select all",
+      "keys": "Ctrl+A",
+      "icon": "edit-select-all"
+    }
+  ]
+}
