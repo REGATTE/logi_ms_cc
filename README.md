@@ -12,9 +12,10 @@ This is an independent community project, not Logitech's Logi Options+ software.
 - **Small background worker:** Rust handles the keypad, virtual shortcut input, panel icon and X11 focus events. The native Qt settings window runs only while open.
 - **System, light or dark appearance:** follows your desktop by default, with an immediate override in Settings. The window and panel use the same keypad icon.
 - **Installed-app discovery:** scan standard desktop entries, Snap and Flatpak applications; choose apps or Screenshot for the launcher.
+- **Focus or launch:** on X11, an app key brings an existing matching window forward; it launches the app only when no matching window exists.
 - **Compact, reorderable launcher:** available Apps fill keys left-to-right, top-to-bottom. Drag a key to insert it elsewhere; the other keys shift and the keypad updates immediately.
 - **Editable shortcut profiles:** choose a profile, edit its nine actions in the UI, or import declarative JSON from `shortcuts/config/`.
-- **Automatic or manual pages:** the two physical arrow buttons switch Apps/Shortcuts. X11 supports automatic app matching; profiles can also be selected manually.
+- **Automatic or manual pages:** on X11, an app activated from a keypad key shows its assigned shortcuts while it stays active, then returns to Apps when focus leaves. Arrow buttons, manual profiles and the automatic-switching preference remain in control.
 - **Portable settings and explicit permissions:** export/import layouts and profiles, opt into sign-in startup, and use Ubuntu's authentication dialog when device access needs repair.
 
 Closing settings leaves the worker running. Opening settings from the panel icon or app launcher reconnects it, reloads the layout and selects the Apps page. **Quit** in the panel menu stops the worker. One measured idle sample used about **5.5 MiB RAM** with settings closed; see [validation and resource measurements](docs/VALIDATION.md) for conditions and limits.
@@ -47,8 +48,8 @@ Fetch the pinned Qt runtime and locked Rust dependencies, then build and check t
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.3_amd64.deb
-sudo apt install ./dist/mx-creative-control_0.1.3_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.4_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.1.4_amd64.deb
 mx-creative-control
 ```
 
@@ -63,7 +64,7 @@ The app and worker run as your normal user. Installation or **Permissions → Se
 1. Under **Customize**, select a key, choose an installed app or Screenshot, choose a shortcut profile, and press **Apply to key**.
 2. Drag an Apps key onto another to insert it at that position and shift the other keys. Dropping onto a blank key appends it after the other apps. Reorders save and reload the keypad immediately; shortcut slots keep their assigned positions.
 3. Under **Applications**, use **Rescan** after installing an app. Assign a profile, import a JSON file, or edit shortcuts directly.
-4. Use the keypad's arrow buttons for Apps/Shortcuts. Choose **Use preview on keypad** for a manual profile or **Follow active app** for automatic X11 matching.
+4. On X11, press an app key to focus its existing window or launch it. With automatic switching enabled and a profile assigned, the keypad shows that app's shortcuts while it is active and returns to Apps when focus leaves. Apps without a profile stay on Apps. Arrow buttons and **Use preview on keypad** override automatic page choices; **Follow active app** restores automatic matching.
 5. Under **Settings → Appearance**, choose **System setting**, **Light**, or **Dark**. System setting follows desktop changes automatically. Settings also controls labels, sign-in startup and configuration export.
 
 First-run choices target ChatGPT, VS Code, Lark, Firefox, Warp and Screenshot. Available apps and Screenshot fill the Apps page without gaps, left-to-right and top-to-bottom. Configured apps that are missing on this PC remain in settings for portability but do not leave holes between visible keys. A browser shortcut/PWA must provide a desktop entry to appear in discovery. ChatGPT and Lark profiles contain conventional editing actions; app-specific bindings can be added in the editor.
@@ -100,7 +101,7 @@ Automated tests do not access hardware. They cover app discovery, profiles and i
 
 ## Current limits
 
-- Wayland supports app launching, virtual shortcut input and manual profiles; automatic focused-app detection is not implemented. Use an X11 session if automatic matching is required.
+- Wayland supports app launching, virtual shortcut input and manual profiles; focusing existing windows and automatic app/page detection are not implemented. Use an X11 session for those features.
 - Only the MX Creative Keypad is supported. The dialpad is not managed by this application.
 - Applications must expose desktop entries to be discovered. Profiles assume default app shortcuts, which can vary by version, focused widget or user configuration.
 - Validation covers one Ubuntu 24.04 amd64 workstation and physical keypad. Other environments need testing before being treated as supported.

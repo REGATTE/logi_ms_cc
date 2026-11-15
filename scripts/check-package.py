@@ -71,7 +71,7 @@ from mxcc.gui import MainWindow
 from mxcc.configuration import default_settings
 from mxcc.applications import Application
 from mxcc.key_button import LAUNCHER_MIME
-from mxcc.paths import runtime_path, settings_path
+from mxcc.paths import profiles_dir, runtime_path, settings_path
 app = QApplication([])
 widget = QWidget()
 server = QLocalServer()
@@ -87,6 +87,12 @@ assert image.save(sys.argv[2], 'JPEG')
 applications = [Application(f'{name}.desktop', name.title(), sys.argv[3], name,
                             name, Path(f'/unused/{name}.desktop'))
                 for name in ('alpha', 'beta', 'gamma')]
+profiles_dir().mkdir(parents=True, exist_ok=True)
+(profiles_dir() / 'alpha.json').write_text(json.dumps({
+    'version': 1, 'id': 'alpha', 'name': 'Alpha shortcuts',
+    'desktop_ids': ['alpha.desktop'], 'wm_classes': ['alpha'],
+    'shortcuts': [{'slot': 1, 'label': 'Copy', 'keys': 'Ctrl+C', 'icon': 'edit-copy'}],
+}))
 legacy = default_settings(applications)
 legacy['launchers'] = [None, 'alpha.desktop', 'missing.desktop', None,
                        'beta.desktop', 'gamma.desktop', None, '@screenshot', None]
@@ -104,6 +110,18 @@ compiled = json.loads(runtime_path().read_text())
 assert len(compiled['pages']) == 2
 assert all(len(page['keys']) == 9 for page in compiled['pages'])
 assert not window.timer.isActive()
+launch_actions = {key['action']['desktop_id']: key['action']
+                  for key in compiled['pages'][0]['keys']
+                  if key and key['action']['type'] == 'launch'}
+for application in applications:
+    classes = launch_actions[application.id]['wm_classes']
+    assert isinstance(classes, list) and classes
+    assert all(isinstance(value, str) and value for value in classes)
+    assert application.wm_class.casefold() in {value.casefold() for value in classes}
+assert launch_actions['alpha.desktop']['profile_id'] == 'alpha'
+assert any(profile['id'] == 'alpha' for profile in compiled['profiles'])
+assert launch_actions['beta.desktop'].get('profile_id') is None
+assert launch_actions['gamma.desktop'].get('profile_id') is None
 def displayed_launchers():
     keys = json.loads(runtime_path().read_text())['pages'][0]['keys']
     return [key['action'].get('desktop_id', '@screenshot') if key else None for key in keys]
@@ -167,7 +185,7 @@ assert window.settings['launchers'] == saved['launchers']
 assert displayed_launchers() == expected + [None] * 5
 window.close()
 app.processEvents()
-print('Bundled settings, packed Apps/native reorder persistence, themes, icon and runtime smoke: OK')
+print('Bundled settings, activation metadata, packed Apps/native reorder, themes and runtime smoke: OK')
 """
     icon = root / "usr/share/icons/hicolor/scalable/apps/mx-creative-control.svg"
     subprocess.run(["/usr/bin/python3", "-I", "-c", smoke, str(private), str(root / "face.jpg"), str(icon)],

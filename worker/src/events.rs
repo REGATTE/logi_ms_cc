@@ -1,4 +1,4 @@
-use mx_creative_worker::control::Request;
+use mx_creative_worker::control::{Foreground, Request};
 use std::{
     io::Write,
     os::unix::net::UnixStream,
@@ -10,7 +10,7 @@ pub enum Event {
         mpsc::SyncSender<serde_json::Value>,
         mpsc::Receiver<()>,
     ),
-    Focus(String),
+    Focus(Foreground),
     FocusSupport(bool),
     Tray(bool),
     Page(usize),

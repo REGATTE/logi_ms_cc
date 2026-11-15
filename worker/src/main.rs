@@ -1,12 +1,14 @@
+mod activation;
 mod events;
 mod focus;
 mod hardware;
 mod ipc;
+mod launcher;
 mod tray;
 use events::{Event, Sender};
 use mx_creative_worker::{
     config::{Action, Config},
-    control::{Request, State},
+    control::{Foreground, Request, State},
     input::{parse_chord, Keyboard},
     protocol::Press,
 };
@@ -94,29 +96,9 @@ impl Options {
     }
 }
 
-fn launch(desktop_id: &str) -> Result<(), String> {
-    let mut command = std::process::Command::new("gtk-launch");
-    command.arg(desktop_id);
-    let home = env::var("HOME").unwrap_or_default();
-    let defaults =
-        env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-    command.env("XDG_DATA_DIRS",format!("{defaults}:/var/lib/snapd/desktop:/var/lib/flatpak/exports/share:{home}/.local/share/flatpak/exports/share"));
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("cannot launch {desktop_id}: {e}"))?;
-    std::thread::spawn(move || {
-        if let Ok(status) = child.wait() {
-            if !status.success() {
-                eprintln!("gtk-launch exited with {status}");
-            }
-        }
-    });
-    Ok(())
-}
-
 fn action(action: &Action, keyboard: &mut Option<Keyboard>) -> Result<(), String> {
     match action {
-        Action::Launch { desktop_id } => launch(desktop_id),
+        Action::Launch { .. } => Err("Launcher actions require desktop activation".into()),
         Action::None {} => Ok(()),
         Action::Shortcut { .. } | Action::Screenshot {} => {
             let keys = if let Action::Shortcut { keys } = action {
@@ -178,11 +160,13 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut keypad: Option<hardware::Keypad> = None;
     let mut keyboard = None;
+    let mut launcher = launcher::Launcher::default();
     let mut retry = Instant::now();
     let mut redraw = true;
     let mut quit = false;
     let mut tray_state = None;
     while !quit {
+        redraw |= state.tick(Instant::now());
         if Instant::now() >= retry {
             retry = Instant::now() + Duration::from_secs(5);
             if keyboard.is_none() {
@@ -284,13 +268,10 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         let _ = written.recv_timeout(Duration::from_secs(1));
                     }
                 }
-                Event::Focus(name) => {
-                    if state.status.active_app != name {
-                        state.status.active_app = name;
-                        redraw = true;
-                    }
+                Event::Focus(foreground) => {
+                    redraw |= state.focus_changed(foreground, Instant::now());
                 }
-                Event::FocusSupport(value) => state.status.focus_supported = value,
+                Event::FocusSupport(value) => redraw |= state.set_focus_supported(value),
                 Event::Tray(value) => state.status.tray_available = value,
                 Event::Page(page) => {
                     let _ = state.select_page(page);
@@ -311,9 +292,57 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         redraw = true;
                     }
                     Press::Key(slot) if !state.status.paused => {
-                        if let Some(key) = &state.page().keys[slot] {
-                            if let Err(e) = action(&key.action, &mut keyboard) {
-                                state.status.last_error = Some(e);
+                        if let Some(key) = state.page().keys[slot].clone() {
+                            if let Action::Launch {
+                                desktop_id,
+                                wm_classes,
+                                profile_id,
+                            } = &key.action
+                            {
+                                let now = Instant::now();
+                                match launcher.activate(
+                                    desktop_id,
+                                    wm_classes,
+                                    session == "x11",
+                                    now,
+                                ) {
+                                    Ok(launcher::Outcome::Existing(window)) => {
+                                        if window.already_active {
+                                            redraw |= state.focus_changed(
+                                                Foreground {
+                                                    window: window.window,
+                                                    name: window.wm_class.clone(),
+                                                    identities: vec![window.wm_class],
+                                                },
+                                                now,
+                                            );
+                                        }
+                                        redraw |= state.launch_succeeded(
+                                            desktop_id,
+                                            wm_classes,
+                                            profile_id.as_deref(),
+                                            Some(window.window),
+                                            window.already_active,
+                                            now,
+                                        );
+                                        state.status.last_error = None;
+                                    }
+                                    Ok(launcher::Outcome::Started) => {
+                                        redraw |= state.launch_succeeded(
+                                            desktop_id,
+                                            wm_classes,
+                                            profile_id.as_deref(),
+                                            None,
+                                            false,
+                                            now,
+                                        );
+                                        state.status.last_error = None;
+                                    }
+                                    Ok(launcher::Outcome::Pending) => {}
+                                    Err(error) => state.status.last_error = Some(error),
+                                }
+                            } else if let Err(error) = action(&key.action, &mut keyboard) {
+                                state.status.last_error = Some(error);
                             }
                         }
                     }
@@ -366,6 +395,17 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     timeout.min(draw_timeout)
                 };
             }
+        }
+        if let Some(deadline) = state.deadline() {
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            timeout = if timeout < 0 {
+                remaining
+            } else {
+                timeout.min(remaining)
+            };
         }
         let mut fds = [
             libc::pollfd {

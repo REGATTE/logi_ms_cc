@@ -36,7 +36,7 @@ Profiles with no match can be assigned manually to a desktop app in settings.
   "version":1,
   "auto_switch":true,
   "pages":[
-    {"name":"Apps","keys":[{"label":"Firefox","action":{"type":"launch","desktop_id":"firefox.desktop"},"image":"HASH.jpg"},null,null,null,null,null,null,null,null]},
+    {"name":"Apps","keys":[{"label":"VS Code","action":{"type":"launch","desktop_id":"code.desktop","wm_classes":["code"],"profile_id":"vscode"},"image":"HASH.jpg"},null,null,null,null,null,null,null,null]},
     {"name":"Shortcuts","keys":[{"label":"Copy","action":{"type":"shortcut","keys":"Ctrl+C"},"image":"HASH.jpg"},null,null,null,null,null,null,null,null]}
   ],
   "profiles":[{"id":"vscode","wm_classes":["code"],"page":{"name":"VS Code","keys":[null,null,null,null,null,null,null,null,null]}}]
@@ -45,10 +45,25 @@ Profiles with no match can be assigned manually to a desktop app in settings.
 
 Image names are simple filenames relative to the keys cache; no paths/traversal.
 Pages have exactly nine optional keys. Supported action types: `launch`
-(desktop entry ID, launched without a shell using `gtk-launch`), `shortcut`
+(desktop entry ID, `wm_classes` array and optional `profile_id`), `shortcut`
 (key combination), `screenshot` (Print), `none`. Empty tiles do nothing.
-The Apps page does not change with window focus; page 1 follows the focused app when auto_switch
-is enabled. The keypad's two physical navigation buttons switch the two pages.
+On X11, a launch action focuses an existing window matching its class candidates;
+only when no match exists is its desktop entry launched with `gtk-launch`, without
+a command shell. An assigned `profile_id` identifies the app's shortcut profile;
+an absent/null value means no automatic shortcut page for that key.
+
+With `auto_switch` enabled, pressing an app key arms automatic paging for that
+keypad-activated app: show its assigned shortcuts once it is active, keep them
+while it stays active, and return to Apps when focus leaves. Apps without a
+profile stay on Apps. Explicit physical/page controls and manual profile choices
+override automatic page selection. With `auto_switch` disabled, app activation
+still works but page selection remains manual. Ordinary focus changes do not
+initiate this keypad-activation flow by themselves. Activation waits at most
+12 seconds for confirmed foreground; expiry discards the pending context.
+Manual page/profile selection cancels that context, so later focus changes do
+not re-arm it. On Wayland, launch actions
+launch the desktop entry; existing-window activation and automatic paging are
+unavailable. The keypad's two physical navigation buttons remain usable.
 
 The Apps page packs available desktop apps and Screenshot left-to-right,
 top-to-bottom with trailing empty keys only. Launcher normalization preserves
@@ -67,7 +82,12 @@ Requests: `{"command":"status"}`, `{"command":"reload"}`,
 `{"command":"pause","value":true}`, `{"command":"page","index":1}`,
 `{"command":"shutdown"}`. Responses contain `ok` plus optional `error`.
 Status additionally contains `connected`, `keypad_access`, `input_access`,
-`session` (`x11`/`wayland`), `focus_supported`, `active_app`, `page`, `paused`.
+`session` (`x11`/`wayland`), `focus_supported`, `active_app`, `page`, `paused`,
+`version` and `capabilities`. The `launcher_activation_v1` capability identifies
+workers that accept launch activation metadata and manage the corresponding
+automatic pages. Settings checks this before reusing a running worker. If it
+is absent, settings verifies the replacement binary's version before requesting
+a normal shutdown and starting the compatible worker.
 Socket directory is user-owned mode 0700, socket mode 0600. Limit requests.
 Worker CLI supports `--config PATH --cache PATH --socket PATH --gui-command PATH`
 and `--no-tray` for test/headless use; defaults follow paths above.
@@ -106,8 +126,9 @@ Use original icons from installed desktop entries/theme. No downloaded branding
 or invented app logos. Handle absent apps explicitly. Permissions are scoped
 to keypad 046d:c354 and uinput; no reading ordinary keyboards. Root-owned
 polkit helper has a fixed operation and accepts no arbitrary paths/commands.
-X11 automatic focus is supported initially; on Wayland report integration
-unavailable accurately and retain launch/manual shortcut pages.
+X11 existing-window activation and automatic focus/page handling are supported;
+on Wayland report these integrations unavailable accurately and retain app
+launching and manual shortcut pages.
 
 Minimum tests cover desktop-entry discovery, invalid/imported profiles,
 runtime compilation, HID packet/event handling, shortcut parsing, IPC/control

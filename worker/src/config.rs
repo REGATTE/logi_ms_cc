@@ -28,8 +28,16 @@ pub struct Key {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
-    Launch { desktop_id: String },
-    Shortcut { keys: String },
+    Launch {
+        desktop_id: String,
+        #[serde(default)]
+        wm_classes: Vec<String>,
+        #[serde(default)]
+        profile_id: Option<String>,
+    },
+    Shortcut {
+        keys: String,
+    },
     Screenshot {},
     None {},
 }
@@ -96,6 +104,23 @@ impl Config {
             }
             p.page.validate()?;
         }
+        for page in self
+            .pages
+            .iter()
+            .chain(self.profiles.iter().map(|profile| &profile.page))
+        {
+            for key in page.keys.iter().flatten() {
+                if let Action::Launch {
+                    profile_id: Some(id),
+                    ..
+                } = &key.action
+                {
+                    if id != "default" && !ids.contains(id) {
+                        return Err(format!("unknown launcher profile: {id}"));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -113,10 +138,23 @@ impl Page {
                 return Err("invalid key label or JPEG filename".into());
             }
             match &key.action {
-                Action::Launch { desktop_id }
-                    if !simple_filename(desktop_id) || !desktop_id.ends_with(".desktop") =>
-                {
-                    return Err("invalid desktop entry ID".into())
+                Action::Launch {
+                    desktop_id,
+                    wm_classes,
+                    ..
+                } => {
+                    if !simple_filename(desktop_id) || !desktop_id.ends_with(".desktop") {
+                        return Err("invalid desktop entry ID".into());
+                    }
+                    if wm_classes.len() > 64
+                        || wm_classes.iter().any(|value| {
+                            value.is_empty()
+                                || value.len() > 255
+                                || value.chars().any(char::is_control)
+                        })
+                    {
+                        return Err("invalid launcher window class".into());
+                    }
                 }
                 Action::Shortcut { keys } => {
                     crate::input::parse_chord(keys)?;

@@ -74,7 +74,8 @@ def test_compile_two_pages_uses_original_icon_and_installed_apps(monkeypatch, tm
     runtime = compile_runtime(settings, [firefox], profiles, record)
     assert len(runtime["pages"]) == 2
     assert all(len(page["keys"]) == 9 for page in runtime["pages"])
-    assert runtime["pages"][0]["keys"][0]["action"] == {"type": "launch", "desktop_id": "firefox.desktop"}
+    assert runtime["pages"][0]["keys"][0]["action"] == {
+        "type": "launch", "desktop_id": "firefox.desktop", "wm_classes": ["firefox"], "profile_id": "firefox"}
     assert runtime["pages"][0]["keys"][1]["action"] == {"type": "screenshot"}
     assert runtime["pages"][0]["keys"][2:] == [None] * 7
     assert settings["launchers"] == original_launchers
@@ -196,3 +197,32 @@ def test_failed_atomic_replace_keeps_previous_file(monkeypatch, tmp_path):
         save_settings(settings | {"auto_switch": False})
     assert json.loads(path.read_text()) == settings
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_launcher_identity_is_app_specific_even_with_a_shared_profile(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths, 'profiles_dir', lambda: tmp_path)
+    profiles = load_profiles()
+    code = app('code.desktop', 'VS Code', 'Code')
+    codium = app('codium.desktop', 'VSCodium', 'VSCodium')
+    settings = default_settings([code, codium])
+    settings['launchers'] = [code.id, codium.id] + [None] * 7
+    settings['profile_assignments'][codium.id] = 'vscode'
+    runtime = compile_runtime(settings, [code, codium], profiles, render)
+    first, second = [key['action'] for key in runtime['pages'][0]['keys'][:2]]
+    assert first['wm_classes'] == ['code']
+    assert second['wm_classes'] == ['vscodium', 'codium']
+    assert first['profile_id'] == second['profile_id'] == 'vscode'
+    settings['profile_assignments'][code.id] = None
+    settings['profile_assignments'][codium.id] = 'default'
+    runtime = compile_runtime(settings, [code, codium], profiles, render)
+    assert runtime['pages'][0]['keys'][0]['action']['profile_id'] is None
+    assert runtime['pages'][0]['keys'][1]['action']['profile_id'] == 'default'
+
+
+def test_launcher_without_startup_class_uses_desktop_identity():
+    application = app('org.example.Editor.desktop', 'Editor', '')
+    settings = default_settings([])
+    settings['launchers'] = [application.id] + [None] * 8
+    action = compile_runtime(settings, [application], {}, render)['pages'][0]['keys'][0]['action']
+    assert action['wm_classes'] == ['org.example.editor']
+    assert action['profile_id'] is None

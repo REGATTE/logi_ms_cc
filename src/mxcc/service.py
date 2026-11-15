@@ -7,12 +7,13 @@ import subprocess
 import sys
 import time
 
-from . import ipc
+from . import __version__, ipc
 from .paths import cache_dir, config_dir, runtime_path, socket_path
 
 SERVICE = "mx-creative-control.service"
 DEV_SERVICE = "mx-creative-control-dev.service"
 USER_UNIT = Path("/usr/lib/systemd/user") / SERVICE
+REQUIRED_CAPABILITY = "launcher_activation_v1"
 # Only session/display locations needed by the worker and its settings launcher
 # cross into the transient service. Never copy the caller's entire environment.
 SESSION_ENVIRONMENT = (
@@ -122,13 +123,48 @@ def _start_direct_worker():
     return process, f"See {log_path}."
 
 
-def ensure_running() -> dict:
+def _compatible(status: dict) -> bool:
+    capabilities = status.get("capabilities")
+    return status.get("ok") is True and isinstance(capabilities, list) and REQUIRED_CAPABILITY in capabilities
+
+
+def _upgrade_worker() -> None:
+    """Verify the replacement before asking the old worker to exit normally."""
     try:
-        return ipc.request("status")
+        result = subprocess.run([str(worker_binary()), "--version"],
+                                capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f"Could not verify the replacement worker: {error}") from error
+    if result.returncode or result.stdout.strip() != __version__:
+        raise RuntimeError(f"Install MX Creative Control {__version__} or rebuild its worker before upgrading the running service.")
+    try:
+        response = ipc.request("shutdown", timeout=2)
+    except ipc.WorkerUnavailable as error:
+        raise RuntimeError(f"Could not stop the old worker for upgrade: {error}") from error
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "The old worker refused to stop for upgrade."))
+    for _ in range(30):
+        if not socket_path().exists():
+            return
+        time.sleep(0.1)
+    raise RuntimeError("The old worker did not stop. Quit it from the panel icon, then reopen settings.")
+
+
+def ensure_running() -> dict:
+    running = None
+    try:
+        running = ipc.request("status")
     except ipc.WorkerUnavailable:
         pass
+    if running is not None:
+        if _compatible(running):
+            return running
+        if not running.get("ok"):
+            raise RuntimeError(running.get("error", "Could not read worker status."))
     if not runtime_path().exists():
         raise RuntimeError("Open settings once to create your keypad layout.")
+    if running is not None:
+        _upgrade_worker()
     unit = _start_managed_worker()
     if unit:
         process = None
@@ -137,11 +173,15 @@ def ensure_running() -> dict:
         process, diagnostic = _start_direct_worker()
     for _ in range(30):
         try:
-            return ipc.request("status", timeout=0.15)
+            status = ipc.request("status", timeout=0.15)
         except ipc.WorkerUnavailable:
             if process is not None and process.poll() is not None:
                 raise RuntimeError(f"The worker exited. {diagnostic}")
             time.sleep(0.1)
+            continue
+        if not _compatible(status):
+            raise RuntimeError(f"The started worker is incompatible. Install MX Creative Control {__version__} or rebuild its worker. {diagnostic}")
+        return status
     raise RuntimeError(f"The worker did not become ready. {diagnostic}")
 
 

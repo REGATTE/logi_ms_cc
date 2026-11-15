@@ -244,3 +244,27 @@ fn ipc_requests_are_typed_and_cannot_smuggle_shell_actions() {
         assert!(serde_json::from_value::<Request>(invalid).is_err());
     }
 }
+
+#[test]
+fn launcher_identity_metadata_is_optional_but_validated_when_present() {
+    let mut data = config_value();
+    let key = json!({"label":"Editor","image":"icon.jpg","action":{"type":"launch","desktop_id":"editor.desktop"}});
+    data["pages"][0]["keys"][0] = key;
+    assert!(valid(data.clone()).is_ok()); // Older saved runtime remains readable.
+    data["pages"][0]["keys"][0]["action"]["wm_classes"] = json!(["Editor", "org.example.Editor"]);
+    data["pages"][0]["keys"][0]["action"]["profile_id"] = json!("default");
+    assert!(valid(data.clone()).is_ok());
+    for classes in [
+        json!([""]),
+        json!(["bad\nclass"]),
+        json!(["x".repeat(256)]),
+        json!(vec!["app"; 65]),
+        json!("not an array"),
+    ] {
+        let mut malformed = data.clone();
+        malformed["pages"][0]["keys"][0]["action"]["wm_classes"] = classes;
+        assert!(valid(malformed).is_err());
+    }
+    data["pages"][0]["keys"][0]["action"]["profile_id"] = json!("missing-profile");
+    assert!(valid(data).is_err());
+}

@@ -10,9 +10,14 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.1.3_amd64.deb
+sudo apt install ./mx-creative-control_0.1.4_amd64.deb
 mx-creative-control
 ```
+
+When upgrading an existing installation, close its settings window before
+installing the new package, then reopen settings afterward. The single-instance
+window otherwise keeps running the old interface code. Reopening loads the new
+interface, regenerates its runtime configuration and checks worker compatibility.
 
 The package includes its pinned Qt runtime. Installation does not run pip or
 download application code; apt may download declared Ubuntu system dependencies.
@@ -33,6 +38,14 @@ use on another PC; they do not leave gaps between visible keys. Drag an Apps key
 onto another to insert it there and shift the remaining apps. Dropping onto an
 empty key appends it. Reordering saves the layout and reloads the keypad
 immediately. Shortcut profiles keep their explicit slot positions.
+
+On X11, pressing an app key focuses an existing matching window. The app is
+launched only when no matching window exists. With automatic switching enabled,
+an app activated from the keypad shows its assigned shortcuts while it remains
+active; leaving that app returns the keypad to Apps. Apps without an assigned
+profile stay on Apps. Using the physical arrow buttons or a manual profile
+overrides automatic page choices. Disabling automatic switching leaves page
+selection manual while app keys still focus or launch their applications.
 
 The Rust worker stays in the background and owns the tray icon. Opening settings
 starts the Qt process; closing settings releases that process. Ubuntu's default
@@ -100,9 +113,10 @@ is an active local desktop session. Access is intentionally tied to the active
 seat. Rules placed by an administrator in `/etc/udev/rules.d/` may override the
 packaged rule and are not overwritten by the helper.
 
-Automatic switching to the focused app's shortcuts initially supports X11.
+Existing-window activation and automatic shortcut-page switching support X11.
 Wayland keeps launching apps and manually selected shortcut pages working, but
-does not expose global app focus to this implementation. The settings status
+this implementation cannot focus existing Wayland windows or detect their
+global focus changes. The settings status
 shows this limitation. In the shortcut preview, choose a profile and press
 **Use preview on keypad** to select it manually. Select **Ubuntu on Xorg** at login if automatic focus
 switching is required. Keyboard shortcuts are emitted as Linux key codes, so
@@ -125,7 +139,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.1.3_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.1.4_amd64.deb
 python3 scripts/source-archive.py
 ```
 

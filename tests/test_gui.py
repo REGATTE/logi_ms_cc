@@ -76,7 +76,8 @@ def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app
     settings = json.loads(paths.settings_path().read_text())
     assert settings["launchers"] == ["@screenshot", "editor.desktop"] + [None] * 7
     key = json.loads(paths.runtime_path().read_text())["pages"][0]["keys"][1]
-    assert key["action"] == {"type": "launch", "desktop_id": "editor.desktop"}
+    assert key["action"] == {"type": "launch", "desktop_id": "editor.desktop",
+                             "wm_classes": ["editor"], "profile_id": None}
     image_path = paths.cache_dir() / key["image"]
     assert image_path.read_bytes().startswith(b"\xff\xd8")
     image = QImage(str(image_path))

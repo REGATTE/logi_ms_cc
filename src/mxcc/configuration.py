@@ -152,18 +152,30 @@ def compile_runtime(settings: dict, apps: Iterable[Application], profiles: dict[
                 keys[entry["slot"] - 1] = {"label": entry["label"], "action": {"type": "shortcut", "keys": entry["keys"]}, "image": face(entry["label"], entry["icon"])}
         return {"name": name, "keys": keys}
 
+    selections = {app.id: profile_for_app(app, profiles, settings["profile_assignments"]) for app in apps}
     launcher_keys: list[dict | None] = []
     for app_id in compact_launchers(settings["launchers"], apps):
         if app_id == "@screenshot":
             launcher_keys.append({"label": "Screenshot", "action": {"type": "screenshot"}, "image": face("Screenshot", "applets-screenshooter")})
         elif app_id in indexed:
             app = indexed[app_id]
-            launcher_keys.append({"label": app.name, "action": {"type": "launch", "desktop_id": app.id}, "image": face(app.name, app.icon, app)})
+            # Launcher identity belongs to this app, not all the apps that may
+            # share its shortcut profile. Never focus another app by profile alias.
+            classes = list(dict.fromkeys(value.casefold() for value in
+                           (app.wm_class, app.id.removesuffix(".desktop")) if value))
+            if any(len(value.encode("utf-8")) > 255 or any(ord(c) < 32 or ord(c) == 127 for c in value)
+                   for value in classes):
+                raise ConfigurationError("Application window class is invalid")
+            profile = selections[app.id]
+            launcher_keys.append({"label": app.name,
+                                  "action": {"type": "launch", "desktop_id": app.id,
+                                             "wm_classes": classes,
+                                             "profile_id": profile["id"] if profile else None},
+                                  "image": face(app.name, app.icon, app)})
         else:
             launcher_keys.append(None)
     pages = [{"name": "Apps", "keys": launcher_keys}, shortcut_page(profiles.get("default"), "Shortcuts")]
     runtime_profiles: dict[str, dict] = {}
-    selections = {app.id: profile_for_app(app, profiles, settings["profile_assignments"]) for app in apps}
     class_owners = {}
     for app in apps:
         selection = selections[app.id]

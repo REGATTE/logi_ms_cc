@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
         self.repair_button = button("Set up device permissions…", self.setup_permissions, True)
         layout.addWidget(self.repair_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(button("Reconnect / check again", self.start_worker), 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(label("On Wayland, automatic app detection needs a desktop-specific integration. This version keeps the launcher and manual page controls available; X11 supports automatic shortcut profiles.", "muted", True))
+        layout.addWidget(label("On Wayland, app keys launch applications, but this version cannot focus their existing windows or switch pages automatically. X11 supports both; manual pages work on either session.", "muted", True))
         layout.addStretch()
         self.stack.addWidget(widget)
 
@@ -259,7 +259,7 @@ class MainWindow(QMainWindow):
         self.start_at_login.setChecked(self.settings["start_at_login"])
         self.start_at_login.toggled.connect(self.change_autostart)
         layout.addWidget(self.start_at_login)
-        self.auto_switch = QCheckBox("Match the shortcuts page to the active app (X11)")
+        self.auto_switch = QCheckBox("Automatically show shortcuts after pressing an app key (X11)")
         self.auto_switch.setChecked(self.settings["auto_switch"])
         self.auto_switch.toggled.connect(lambda value: self.setting_changed("auto_switch", value))
         layout.addWidget(self.auto_switch)
@@ -390,7 +390,7 @@ class MainWindow(QMainWindow):
         self.auto_switch.setChecked(True)
         self.auto_switch.blockSignals(False)
         self.safe_save()
-        self.notice.setText("The shortcuts page follows the active app on X11.")
+        self.notice.setText("Automatic app shortcuts are enabled on X11. App keys switch pages while their app is active.")
 
     def refresh_keys(self, *_):
         if not self.runtime:

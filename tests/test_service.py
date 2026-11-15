@@ -2,11 +2,15 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
-from mxcc import ipc, service
+from mxcc import __version__, ipc, service
+
+
+def compatible_status(**values):
+    return {"ok": True, "version": __version__, "capabilities": [service.REQUIRED_CAPABILITY], **values}
 
 
 def result(stdout="", stderr="", code=0):
@@ -23,9 +27,11 @@ def lifecycle(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "USER_UNIT", unit)
     monkeypatch.setattr(service, "runtime_path", lambda: runtime)
     monkeypatch.setattr(service, "config_dir", lambda: configuration)
+    monkeypatch.setattr(service, "socket_path", lambda: tmp_path / "control.sock")
+    monkeypatch.setattr(service, "worker_binary", lambda: Path("/checkout/worker"))
     arguments = ["/checkout/worker", "--config", str(runtime), "--gui-command", "/checkout/run-dev.sh"]
     monkeypatch.setattr(service, "agent_arguments", Mock(return_value=arguments))
-    request = Mock(side_effect=[ipc.WorkerUnavailable("not running"), {"ok": True}])
+    request = Mock(side_effect=[ipc.WorkerUnavailable("not running"), compatible_status()])
     monkeypatch.setattr(service.ipc, "request", request)
     run = Mock()
     popen = Mock(return_value=Mock(poll=Mock(return_value=None)))
@@ -55,7 +61,7 @@ def test_packaged_gui_keeps_installed_command(monkeypatch, tmp_path):
 def test_existing_worker_needs_no_process_or_service(lifecycle):
     _, _, request, run, popen = lifecycle
     request.side_effect = None
-    request.return_value = {"ok": True, "connected": True}
+    request.return_value = compatible_status(connected=True, version="99.0.0")
     assert service.ensure_running() == request.return_value
     run.assert_not_called()
     popen.assert_not_called()
@@ -65,7 +71,7 @@ def test_installed_unit_is_started_without_enabling_it(lifecycle):
     unit, _, _, run, popen = lifecycle
     unit.write_text("[Service]\n")
     run.side_effect = [result("255"), result()]
-    assert service.ensure_running() == {"ok": True}
+    assert service.ensure_running() == compatible_status()
     assert [item.args[0] for item in run.call_args_list] == [
         ["systemctl", "--user", "show", "--property=Version", "--value"],
         ["systemctl", "--user", "start", service.SERVICE],
@@ -79,7 +85,7 @@ def test_source_transient_unit_has_restart_policy_and_only_session_environment(l
     monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/test configuration")
     monkeypatch.setenv("MXCC_TEST_API_TOKEN", "must-not-copy")
     run.side_effect = [result("255"), result("not-found"), result()]
-    assert service.ensure_running() == {"ok": True}
+    assert service.ensure_running() == compatible_status()
     command = run.call_args.args[0]
     assert command[:7] == [
         "systemd-run", "--user", "--unit=mx-creative-control-dev", "--collect",
@@ -98,7 +104,7 @@ def test_source_transient_unit_has_restart_policy_and_only_session_environment(l
 def test_existing_transient_unit_is_reused_during_restart(lifecycle):
     _, _, _, run, popen = lifecycle
     run.side_effect = [result("255"), result("loaded"), result()]
-    assert service.ensure_running() == {"ok": True}
+    assert service.ensure_running() == compatible_status()
     assert run.call_args.args[0] == ["systemctl", "--user", "start", service.DEV_SERVICE]
     assert all(item.args[0][0] != "systemd-run" for item in run.call_args_list)
     popen.assert_not_called()
@@ -107,7 +113,7 @@ def test_existing_transient_unit_is_reused_during_restart(lifecycle):
 def test_unavailable_user_manager_falls_back_to_detached_process(lifecycle):
     _, arguments, _, run, popen = lifecycle
     run.return_value = result(stderr="Failed to connect to bus", code=1)
-    assert service.ensure_running() == {"ok": True}
+    assert service.ensure_running() == compatible_status()
     assert popen.call_args.args[0] == arguments
     assert popen.call_args.kwargs["start_new_session"] is True
     assert popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
@@ -118,7 +124,7 @@ def test_unavailable_user_manager_falls_back_to_detached_process(lifecycle):
 def test_missing_systemctl_also_uses_direct_fallback(lifecycle):
     _, _, _, run, popen = lifecycle
     run.side_effect = FileNotFoundError("systemctl")
-    assert service.ensure_running() == {"ok": True}
+    assert service.ensure_running() == compatible_status()
     popen.assert_called_once()
 
 
@@ -137,4 +143,94 @@ def test_missing_configuration_does_not_start_any_worker(lifecycle):
     with pytest.raises(RuntimeError, match="Open settings once"):
         service.ensure_running()
     run.assert_not_called()
+    popen.assert_not_called()
+
+
+def test_old_worker_is_verified_stopped_and_restarted_with_installed_unit(lifecycle):
+    unit, _, request, run, popen = lifecycle
+    unit.write_text('[Service]\n')
+    service.socket_path().touch()
+    old = {'ok': True, 'pid': 41}
+    current = compatible_status(pid=42)
+    order = []
+    responses = iter([old, {'ok': True}, current])
+
+    def answer(command, **kwargs):
+        order.append(command)
+        if command == 'shutdown':
+            service.socket_path().unlink()
+        return next(responses)
+
+    process_results = iter([result(__version__), result('255'), result()])
+    def execute(command, **kwargs):
+        order.append(command[-1])
+        return next(process_results)
+
+    request.side_effect = answer
+    run.side_effect = execute
+    assert service.ensure_running() == current
+    assert order == ['status', '--version', 'shutdown', '--value', service.SERVICE, 'status']
+    assert request.call_args_list == [call('status'), call('shutdown', timeout=2), call('status', timeout=0.15)]
+    assert run.call_args_list[0] == call(['/checkout/worker', '--version'], capture_output=True, text=True, timeout=3)
+    assert run.call_args.args[0] == ['systemctl', '--user', 'start', service.SERVICE]
+    popen.assert_not_called()
+
+
+def test_outdated_replacement_binary_leaves_existing_worker_running(lifecycle):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = None
+    request.return_value = {'ok': True, 'version': '0.1.3'}
+    run.return_value = result('0.1.3\n')
+    with pytest.raises(RuntimeError, match='rebuild its worker before upgrading'):
+        service.ensure_running()
+    request.assert_called_once_with('status')
+    run.assert_called_once_with(['/checkout/worker', '--version'], capture_output=True, text=True, timeout=3)
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize('failure', [FileNotFoundError('missing worker'), subprocess.TimeoutExpired('worker', 3)])
+def test_unverifiable_replacement_does_not_stop_running_worker(lifecycle, failure):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = None
+    request.return_value = {'ok': True}
+    run.side_effect = failure
+    with pytest.raises(RuntimeError, match='Could not verify the replacement worker'):
+        service.ensure_running()
+    request.assert_called_once_with('status')
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize('failure', [{'ok': False, 'error': 'refused shutdown'}, ipc.WorkerUnavailable('shutdown connection failed')])
+def test_failed_upgrade_shutdown_never_starts_a_second_worker(lifecycle, failure):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = [{'ok': True}, failure]
+    run.return_value = result(__version__)
+    with pytest.raises(RuntimeError, match='shutdown'):
+        service.ensure_running()
+    assert request.call_args_list == [call('status'), call('shutdown', timeout=2)]
+    run.assert_called_once_with(['/checkout/worker', '--version'], capture_output=True, text=True, timeout=3)
+    popen.assert_not_called()
+
+
+def test_upgrade_waits_for_socket_exit_and_reports_a_worker_that_wont_stop(lifecycle):
+    _, _, request, run, popen = lifecycle
+    service.socket_path().touch()
+    request.side_effect = [{'ok': True}, {'ok': True}]
+    run.return_value = result(__version__)
+    with pytest.raises(RuntimeError, match='old worker did not stop'):
+        service.ensure_running()
+    assert service.time.sleep.call_count == 30
+    assert request.call_count == 2
+    assert run.call_count == 1
+    popen.assert_not_called()
+
+
+def test_newly_started_worker_must_advertise_required_capability(lifecycle):
+    unit, _, request, run, popen = lifecycle
+    unit.write_text('[Service]\n')
+    request.side_effect = [ipc.WorkerUnavailable('not running'), {'ok': True, 'version': '0.1.3'}]
+    run.side_effect = [result('255'), result()]
+    with pytest.raises(RuntimeError, match='started worker is incompatible'):
+        service.ensure_running()
+    assert request.call_args_list == [call('status'), call('status', timeout=0.15)]
     popen.assert_not_called()
