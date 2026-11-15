@@ -111,10 +111,23 @@ compiled runtime and selects Apps page 0. The worker is supervised by the
 systemd user manager when available; source runs use a transient unit. Closing
 settings does not stop the worker. Tray Quit / shutdown IPC stops it explicitly.
 
+Login startup is an explicit per-account preference. `service.set_autostart`
+atomically manages an XDG autostart desktop entry for the installed or source
+launcher, replacing only entries marked as app-owned. It disables a legacy
+enabled user-service login trigger without stopping the current worker and
+restores the previous entry if migration fails. Saving this preference never
+compiles device layouts or sends keypad IPC. Settings rolls setup back if saving
+the preference fails and repairs an enabled entry when reopened.
+The `startup` CLI command imports the installed worker's allowlisted desktop
+environment into the user manager and calls `ensure_running`, without importing
+Qt or changing the preference. New transient workers stop with the graphical
+session. No relaunch or administrator authentication is required for login setup.
+
 ## Paths
 
 - User configuration: `$XDG_CONFIG_HOME/mx-creative-control`, default `~/.config/mx-creative-control`.
 - User profiles: `shortcuts/config/*.json` below that directory.
+- Login entry: `$XDG_CONFIG_HOME/autostart/mx-creative-control.desktop`, default `~/.config/autostart/mx-creative-control.desktop`.
 - Bundled profiles: repository `shortcuts/config/*.json`.
 - Cached JPEG faces: `$XDG_CACHE_HOME/mx-creative-control/keys`, default `~/.cache/mx-creative-control/keys`.
 - IPC: `$XDG_RUNTIME_DIR/mx-creative-control/control.sock`.

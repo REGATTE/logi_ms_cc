@@ -12,7 +12,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.3.1_amd64.deb
+sudo apt install ./mx-creative-control_0.3.2_amd64.deb
 mx-creative-control
 ```
 
@@ -27,7 +27,7 @@ For a completely offline PC, those Ubuntu dependencies must already be present.
 An arm64 machine requires an arm64 build.
 
 The rounded settings window has no native title bar. Drag empty header or footer
-space to move it, use its edges to resize, and use the bottom-right icons to
+space to move it, use its edges to resize, and use the top-right icons to
 minimize, maximize/restore or close. Closing settings leaves the worker running.
 Device artwork is bundled for offline use.
 
@@ -117,15 +117,39 @@ layout and selects the Apps page on the physical keypad. Ubuntu supervises the
 worker with the installed user service; source checkouts use a transient user
 service and `scripts/run-dev.sh`. This startup does not enable the sign-in option.
 
-Enable **Start the keypad worker when I sign in** in Settings if desired.
-Package installation does not enable the service for all users. User service commands, if needed:
+## Automatic login startup
+
+Open **Settings → Background & configuration** and enable **Start automatically
+when I sign in**. The app configures startup for the current account and shows
+success or an error beneath the switch. This works for installed packages and
+source checkouts, requires no administrator authentication, and does not need a
+relaunch. Package installation does not enable startup for all users.
+
+At graphical sign-in, a short-lived launcher starts the worker and tray icon
+using the current desktop session. It does not open settings or leave Python/Qt
+running in the background. An already running compatible worker is reused.
+Turning the switch off removes login startup without stopping the current
+worker; use **Quit** in the tray menu to stop it now.
+
+The app manages `~/.config/autostart/mx-creative-control.desktop`, respecting
+`XDG_CONFIG_HOME`. It safely replaces its own entry and migrates a previously
+enabled `mx-creative-control.service` login trigger. For source runs, keep the
+checkout, virtual environment and worker build available. Reopening an opted-in
+app repairs the entry after moving the checkout. If setup fails, the switch
+returns to its previous state and displays the error; no device layout changes
+are needed.
+
+For startup diagnostics with an installed package:
 
 ```sh
-systemctl --user daemon-reload
-systemctl --user enable mx-creative-control.service
 systemctl --user status mx-creative-control.service
 journalctl --user -u mx-creative-control.service -n 60
 ```
+
+For a source checkout, use `mx-creative-control-dev.service` in those commands.
+After saving a layout, `mx-creative-control startup` (installed) or
+`scripts/run-dev.sh startup` (source) exercises the background startup path
+without opening settings or enabling the preference.
 
 Only one program should own the keypad. Stop an older OpenLogi/prototype keypad
 service before starting this app; otherwise both programs may overwrite its
@@ -161,7 +185,8 @@ Use `scripts/run-dev.sh` to open the source checkout with its own Qt runtime.
 When the packaged user unit is installed, settings starts that unit. Otherwise,
 on a desktop with a systemd user manager, source settings starts the transient
 `mx-creative-control-dev.service` unit. It survives closing the window or the
-terminal that opened it, restarts on failures, and is not enabled at login.
+terminal that opened it and restarts on failures. Login startup remains opt-in
+through the Settings switch described above.
 Its log is available with `journalctl --user -u mx-creative-control-dev.service`.
 On desktops without a user manager, the app uses a detached worker and writes
 `worker.log` beneath its user configuration directory.
@@ -198,7 +223,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.3.1_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.3.2_amd64.deb
 python3 scripts/source-archive.py
 ```
 

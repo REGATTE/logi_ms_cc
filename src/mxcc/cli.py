@@ -136,7 +136,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Configure the MX Creative Keypad on Ubuntu")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("command", nargs="?", default="configure",
-                        choices=("configure", "ring", "agent", "status", "pause", "resume", "quit"))
+                        choices=("configure", "ring", "agent", "startup", "status", "pause", "resume", "quit"))
     parser.add_argument("--ring-layout", help="Open the Action Ring editor for a desktop ID or default")
     parser.add_argument("--add-ring-action", action="store_true", help="Open the ring's action picker")
     args = parser.parse_args(argv)
@@ -154,6 +154,11 @@ def main(argv=None) -> int:
         return run_ring()
     from . import ipc, service
     try:
+        if args.command == "startup":
+            status = service.start_at_login()
+            if not status.get("ok"):
+                raise RuntimeError(status.get("error", "Could not start the background app."))
+            return 0
         if args.command == "agent":
             command = service.agent_arguments()
             os.execv(command[0], command)

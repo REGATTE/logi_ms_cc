@@ -10,7 +10,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -70,26 +70,94 @@ def choose_application(window, identifier):
     window.app_combo.setCurrentIndex(window.app_combo.findData(identifier))
 
 
-def test_frameless_window_footer_controls_preserve_background_worker(isolated_qt, installed_app):
+def test_autostart_toggle_saves_only_login_preference(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    before = window.settings.copy()
+    runtime = paths.runtime_path().read_bytes(), paths.runtime_path().stat().st_mtime_ns
+    setup = Mock()
+    monkeypatch.setattr(gui.service, "set_autostart", setup)
+    monkeypatch.setattr(window, "persist", Mock(side_effect=AssertionError("Login preferences must not reload keys")))
+    for enabled in (True, False):
+        window.start_at_login.setChecked(enabled)
+        assert window.settings == {**before, "start_at_login": enabled}
+        assert json.loads(paths.settings_path().read_text())["start_at_login"] is enabled
+        assert window.start_at_login.isEnabled()
+        assert window.autostart_status.text()
+        assert (paths.runtime_path().read_bytes(), paths.runtime_path().stat().st_mtime_ns) == runtime
+    assert setup.call_args_list == [call(True), call(False)]
+
+
+def test_autostart_setup_failure_keeps_saved_preference_and_reverts_toggle(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    before = paths.settings_path().read_bytes()
+    setup = Mock(side_effect=RuntimeError("Test login setup failure"))
+    monkeypatch.setattr(gui.service, "set_autostart", setup)
+    window.start_at_login.setChecked(True)
+    assert not window.start_at_login.isChecked() and window.start_at_login.isEnabled()
+    assert window.settings["start_at_login"] is False
+    assert paths.settings_path().read_bytes() == before
+    assert "Test login setup failure" in window.autostart_status.text()
+    setup.assert_called_once_with(True)
+
+
+@pytest.mark.parametrize("rollback_error", [None, RuntimeError("rollback unavailable")])
+def test_autostart_preference_failure_rolls_back_setup_and_reports_failure(isolated_qt, installed_app, monkeypatch, rollback_error):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    before = paths.settings_path().read_bytes()
+    setup = Mock(side_effect=[None, rollback_error])
+    monkeypatch.setattr(gui.service, "set_autostart", setup)
+    monkeypatch.setattr(gui, "save_settings", Mock(side_effect=OSError("preference denied")))
+    window.start_at_login.setChecked(True)
+    assert setup.call_args_list == [call(True), call(False)]
+    assert not window.start_at_login.isChecked() and window.start_at_login.isEnabled()
+    assert window.settings["start_at_login"] is False
+    assert paths.settings_path().read_bytes() == before
+    assert "preference denied" in window.autostart_status.text()
+    if rollback_error is not None:
+        assert "rollback unavailable" in window.autostart_status.text()
+
+
+def test_autostart_sync_repairs_enabled_setup_without_enabling_disabled_preference(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    setup = Mock()
+    monkeypatch.setattr(gui.service, "set_autostart", setup)
+    window.connect_worker = True
+    window._sync_autostart()
+    setup.assert_not_called()
+    window.settings["start_at_login"] = True
+    window._sync_autostart()
+    setup.assert_called_once_with(True)
+    setup.side_effect = RuntimeError("Repair needed")
+    window._sync_autostart()
+    assert "Repair needed" in window.autostart_status.text()
+    assert window.settings["start_at_login"] is True
+
+
+def test_frameless_window_top_controls_preserve_background_worker(isolated_qt, installed_app):
     window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
     window.show()
     QApplication.processEvents()
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
-    window.footer.maximize_button.click()
+    controls = window.window_controls
+    assert controls.parentWidget() is window.home
+    assert controls.mapTo(window, QPoint()).y() < 64
+    assert controls.mapTo(window, QPoint()).x() > window.width() / 2
+    controls.maximize_button.click()
     QApplication.processEvents()
     assert window.isMaximized()
-    assert window.footer.maximize_button.kind == "restore"
-    window.footer.maximize_button.click()
+    assert controls.maximize_button.kind == "restore"
+    assert controls.isVisible() and controls.mapTo(window, QPoint()).y() < 64
+    controls.maximize_button.click()
     QApplication.processEvents()
     assert not window.isMaximized()
-    assert window.footer.maximize_button.kind == "maximize"
-    window.footer.minimize_button.click()
+    assert controls.maximize_button.kind == "maximize"
+    controls.minimize_button.click()
     QApplication.processEvents()
     assert window.isMinimized()
     window.showNormal()
     window.timer.start()
     window.device_timer.start()
-    window.footer.close_button.click()
+    controls.close_button.click()
     assert not window.isVisible()
     assert not window.timer.isActive() and not window.device_timer.isActive()
 

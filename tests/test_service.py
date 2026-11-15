@@ -93,6 +93,7 @@ def test_source_transient_unit_has_restart_policy_and_only_session_environment(l
     ]
     assert "--setenv=DISPLAY=:44" in command
     assert "--expand-environment=no" in command
+    assert "--property=PartOf=graphical-session.target" in command
     assert "--setenv=XDG_CONFIG_HOME=/tmp/test configuration" in command
     assert all(item.split("=", 2)[1] in service.SESSION_ENVIRONMENT
                for item in command if item.startswith("--setenv="))

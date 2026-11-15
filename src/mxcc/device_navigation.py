@@ -103,6 +103,7 @@ class DeviceDetails(QWidget):
         layout.setContentsMargins(12, 16, 12, 0)
         layout.setSpacing(12)
         header = QHBoxLayout()
+        self.header_layout = header
         self.back_button = QPushButton("←")
         self.back_button.setObjectName("topbarButton")
         self.back_button.setAccessibleName("All devices")

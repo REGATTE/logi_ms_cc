@@ -311,12 +311,17 @@ def test_global_settings_returns_to_the_page_that_opened_it(window):
 def test_shared_footer_refresh_is_available_on_every_page(window):
     scanner = Mock(busy=False)
     window.device_scanner = scanner
-    pages = [window.home, window.console, window.details, window.settings_page]
+    pages = [window.home, window.console, window.details, window.ring_page, window.settings_page]
     for page in pages:
         window.views.setCurrentWidget(page)
         QApplication.processEvents()
         assert window.footer.refresh_button.isVisible()
         assert window.footer.settings_button.isVisible()
+        controls = window.window_controls
+        assert controls.isVisible()
+        assert controls.parentWidget() is window.views.currentWidget()
+        assert controls.mapTo(window, QPoint()).y() < 64
+        assert controls.mapTo(window, QPoint()).x() > window.width() / 2
         click(window.footer.refresh_button)
         assert window._explicit_device_scan is True
     for index in range(window.stack.count()):
@@ -325,10 +330,18 @@ def test_shared_footer_refresh_is_available_on_every_page(window):
         QApplication.processEvents()
         assert window.footer.refresh_button.isVisible()
         assert window.footer.settings_button.isVisible()
+        controls = window.window_controls
+        assert controls.parentWidget() is window.editor
+        control_rect = QRect(controls.mapTo(window, QPoint()), controls.size())
+        assert window.rect().contains(control_rect)
+        assert control_rect.top() < 64
+        for other in (window.navigation, window.connection):
+            assert not control_rect.intersects(QRect(other.mapTo(window, QPoint()), other.size()))
         click(window.footer.refresh_button)
     assert scanner.refresh.call_count == len(pages) + window.stack.count()
-    assert all(control.isVisible() for control in (window.footer.minimize_button,
-               window.footer.maximize_button, window.footer.close_button))
+    assert all(control.isVisible() for control in (window.window_controls.minimize_button,
+               window.window_controls.maximize_button, window.window_controls.close_button))
+    assert not window.footer.isAncestorOf(window.window_controls)
     window._set_device_scanning(True)
     assert not window.footer.refresh_button.isEnabled()
     window._set_device_scanning(False)

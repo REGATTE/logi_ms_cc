@@ -19,8 +19,9 @@ This is an independent community project, not Logitech's Logi Options+ software.
 - **Connection indicators:** each device has a green dot when connected, red when disconnected, and blinking yellow while searching. On both the home screen and Console component selector, a reported battery percentage appears beside the dot beneath the device; devices without battery data show only the dot. Hover for connection details. Devices seen during the open window's session remain visible after disconnecting; unconfirmed connections use steady yellow.
 - **Original app icons:** artwork comes from installed desktop entries and icon themes, fills the key with a narrow black border, and has no added white tile. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
 - **Small background worker:** Rust handles the keypad, assigned device buttons, virtual shortcut input, panel icon and X11 focus events. Qt runs only while settings or the ring is open.
+- **Automatic login setup:** turn on sign-in startup in Settings to start the background worker and tray icon at your next login. Works with an installed package or a source checkout, without administrator access or a relaunch.
 - **System, light or dark appearance:** follows your desktop by default, with an immediate override in Settings. The window and panel use the same keypad icon.
-- **Rounded neumorphic interface:** softly raised panels, recessed inputs and rounded controls in both themes. The frameless window can be dragged from empty header/footer space and resized at its edges; minimize, maximize/restore and close icons sit at the bottom right.
+- **Rounded neumorphic interface:** softly raised panels, recessed inputs and rounded controls in both themes. The frameless window can be dragged from empty header/footer space and resized at its edges; minimize, maximize/restore and close icons sit at the top right.
 - **Real device artwork:** bundled official Logitech renders identify the MX Creative Console and G402 without network requests. The G402 controls page uses a side view with clickable Back/Forward buttons. Other models retain scalable illustrations. [Artwork sources and attribution](src/mxcc/assets/devices/SOURCES.md).
 - **Installed-app discovery:** scan standard desktop entries, Snap and Flatpak applications; choose apps or Screenshot for the launcher.
 - **Focus or launch:** on X11, an app key brings an existing matching window forward; it launches the app only when no matching window exists.
@@ -59,8 +60,8 @@ Fetch the pinned Qt runtime and locked Rust dependencies, then build and check t
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.3.1_amd64.deb
-sudo apt install ./dist/mx-creative-control_0.3.1_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.3.2_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.3.2_amd64.deb
 mx-creative-control
 ```
 
@@ -114,6 +115,14 @@ The compact popup hides empty actions and supports at most seven actions. Its se
 
 Ring-only **Import/Export** transfers layouts while retaining this PC's button bindings. Global **Export configuration** includes both. See [Action Ring configuration](docs/ACTION-RING.md) for JSON and backend details.
 
+## Start automatically at login
+
+Open the Settings gear at the bottom left, then enable **Background & configuration → Start automatically when I sign in**. The app sets up startup for your account immediately and shows the result beneath the switch. No terminal commands, administrator authentication or relaunch are needed.
+
+At your next graphical login, the background worker and tray icon start with your saved configuration. The settings window stays closed until you open it from the tray or app launcher. Turning the switch off removes automatic startup; it leaves the current worker running until you choose **Quit** in the tray menu. Startup is opt-in on each PC.
+
+For source checkouts, keep the checkout, its virtual environment and built worker available. If you move the checkout, reopen the app from its new location to refresh an enabled startup entry. See [startup diagnostics](docs/INSTALL.md#automatic-login-startup) if setup reports an error.
+
 ## Develop and test
 
 From the cloned repository, using the requirements above:
@@ -134,7 +143,7 @@ cargo fmt --manifest-path worker/Cargo.toml --check
 cargo clippy --manifest-path worker/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
-Automated tests do not access hardware. They cover app discovery, profiles and imports, runtime compilation, real offscreen Qt interactions, permission routing, worker recovery, HID packets, shortcut keys and private IPC. [VALIDATION.md](docs/VALIDATION.md) records separate physical-device checks and current limitations. To produce a clean source archive, run `python3 scripts/source-archive.py`.
+Automated tests do not access hardware. They cover app discovery, profiles and imports, runtime compilation, real offscreen Qt interactions, permission routing, login setup and rollback, worker recovery, HID packets, shortcut keys and private IPC. [VALIDATION.md](docs/VALIDATION.md) records separate physical-device checks and current limitations. To produce a clean source archive, run `python3 scripts/source-archive.py`.
 
 ## Current limits
 

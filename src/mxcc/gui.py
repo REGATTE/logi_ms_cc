@@ -24,7 +24,7 @@ from .appearance import AppearanceController
 from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
 from .customization import CustomizationWorkspace
 from .device_navigation import DeviceDetails, DeviceScanner
-from .device_views import AppFooter, CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
+from .device_views import AppFooter, AppWindowControls, CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
 from .devices import discover_devices
 from .icons import FaceRenderer, display_icon, setup_icon_theme
 from .key_button import KeyButton
@@ -97,11 +97,12 @@ class MainWindow(RoundedWindow):
         shell.addWidget(self.footer)
         self.footer.refresh_requested.connect(lambda: self.refresh_devices(explicit=True))
         self.footer.settings_requested.connect(self.show_settings)
-        self.footer.minimize_requested.connect(self.showMinimized)
-        self.footer.maximize_requested.connect(self.toggle_maximized)
-        self.footer.close_requested.connect(self.close)
+        self.window_controls = AppWindowControls(root)
+        self.window_controls.minimize_requested.connect(self.showMinimized)
+        self.window_controls.maximize_requested.connect(self.toggle_maximized)
+        self.window_controls.close_requested.connect(self.close)
         self.window_state_changed.connect(
-            lambda: self.footer.set_maximized(self.isMaximized() or self.isFullScreen()))
+            lambda: self.window_controls.set_maximized(self.isMaximized() or self.isFullScreen()))
         self.home = DevicesHome()
         self.views.addWidget(self.home)
         self.home.device_selected.connect(self.open_device)
@@ -117,6 +118,7 @@ class MainWindow(RoundedWindow):
         editor_layout.setContentsMargins(12, 16, 12, 0)
         editor_layout.setSpacing(8)
         header = QHBoxLayout()
+        self.editor_header = header
         header.setSpacing(12)
         self.back_button = button("←", self._back_to_devices)
         self.back_button.setObjectName("topbarButton")
@@ -165,6 +167,7 @@ class MainWindow(RoundedWindow):
         ring_page_layout = QVBoxLayout(self.ring_page)
         ring_page_layout.setContentsMargins(12, 16, 12, 0)
         ring_header = QHBoxLayout()
+        self.ring_header = ring_header
         self.ring_back = button("←", self.show_home)
         self.ring_back.setObjectName("topbarButton")
         self.ring_back.setAccessibleName("All devices")
@@ -193,6 +196,7 @@ class MainWindow(RoundedWindow):
         self.timer.timeout.connect(self.refresh_status)
         if connect_worker:
             QTimer.singleShot(0, lambda: self.start_worker(preserve_context=ring_layout is not None))
+            QTimer.singleShot(0, self._sync_autostart)
             self.timer.start()
         else:
             self.connection.setText("Preview · worker not connected")
@@ -216,6 +220,26 @@ class MainWindow(RoundedWindow):
         for region in (root, self.footer, self.home, self.console, self.editor,
                        self.details, self.ring_page, self.settings_page):
             self.mark_drag_region(region)
+        self._page_headers = {
+            self.home: self.home.header_layout,
+            self.console: self.console.header_layout,
+            self.editor: self.editor_header,
+            self.details: self.details.header_layout,
+            self.ring_page: self.ring_header,
+            self.settings_page: self.settings_header,
+        }
+        self._controls_header = None
+        self.views.currentChanged.connect(self._place_window_controls)
+        self._place_window_controls()
+
+    def _place_window_controls(self, _index=None):
+        header = self._page_headers[self.views.currentWidget()]
+        if header is not self._controls_header:
+            if self._controls_header is not None:
+                self._controls_header.removeWidget(self.window_controls)
+            header.addWidget(self.window_controls)
+            self._controls_header = header
+        self.window_controls.show()
 
     def refresh_devices(self, *, explicit=False):
         if self.device_scanner is not None:
@@ -588,6 +612,7 @@ class MainWindow(RoundedWindow):
         outer = QVBoxLayout(self.settings_page)
         outer.setContentsMargins(32, 24, 32, 28)
         header = QHBoxLayout()
+        self.settings_header = header
         self.settings_back = button("←", self._leave_settings)
         self.settings_back.setObjectName("topbarButton")
         self.settings_back.setAccessibleName("Back from settings")
@@ -615,10 +640,13 @@ class MainWindow(RoundedWindow):
         layout.addWidget(label("System setting follows your desktop’s light or dark appearance.", "muted", True))
         layout.addSpacing(16)
         layout.addWidget(label("Background & configuration", "section"))
-        self.start_at_login = QCheckBox("Start the keypad worker when I sign in")
+        self.start_at_login = QCheckBox("Start automatically when I sign in")
         self.start_at_login.setChecked(self.settings["start_at_login"])
         self.start_at_login.toggled.connect(self.change_autostart)
         layout.addWidget(self.start_at_login)
+        self.autostart_status = label("", "muted", True)
+        layout.addWidget(self.autostart_status)
+        self._update_autostart_status()
         self.auto_switch = QCheckBox("Automatically show shortcuts after pressing an app key (X11)")
         self.auto_switch.setChecked(self.settings["auto_switch"])
         self.auto_switch.toggled.connect(lambda value: self.setting_changed("auto_switch", value))
@@ -1109,14 +1137,51 @@ class MainWindow(RoundedWindow):
         self.notice.setText("Appearance saved.")
 
     def change_autostart(self, enabled):
+        previous = self.settings["start_at_login"]
+        candidate = {**self.settings, "start_at_login": enabled}
+        self.start_at_login.setEnabled(False)
         try:
             service.set_autostart(enabled)
-            self.setting_changed("start_at_login", enabled)
-        except (OSError, RuntimeError) as exc:
+            try:
+                # Login startup is a local preference, not a keypad edit.
+                save_settings(candidate)
+            except (OSError, ValueError) as error:
+                message = f"Could not save the login startup preference: {error}"
+                try:
+                    service.set_autostart(previous)
+                except (OSError, RuntimeError, ValueError) as rollback_error:
+                    message += f"\nCould not restore the previous startup setup: {rollback_error}"
+                raise RuntimeError(message) from error
+            self.settings = candidate
+            self._update_autostart_status()
+        except (OSError, RuntimeError, ValueError) as exc:
             self.start_at_login.blockSignals(True)
-            self.start_at_login.setChecked(not enabled)
+            self.start_at_login.setChecked(previous)
             self.start_at_login.blockSignals(False)
-            QMessageBox.information(self, "Automatic startup", str(exc))
+            self._update_autostart_status(str(exc))
+            QMessageBox.warning(self, "Automatic startup", str(exc))
+        finally:
+            self.start_at_login.setEnabled(True)
+
+    def _update_autostart_status(self, error=None):
+        if error:
+            self.autostart_status.setText(f"Login startup needs attention. {error}")
+        elif self.settings["start_at_login"]:
+            self.autostart_status.setText(
+                "Starts in the background at sign-in, with a tray icon. No relaunch needed.")
+        else:
+            self.autostart_status.setText(
+                "Enable to set up login startup automatically for this account.")
+
+    def _sync_autostart(self):
+        """Repair an opted-in login entry after moving or updating the app."""
+        if self.settings["start_at_login"]:
+            try:
+                service.set_autostart(True)
+            except (OSError, RuntimeError, ValueError) as error:
+                self._update_autostart_status(str(error))
+                return
+        self._update_autostart_status()
 
     def export_configuration(self):
         filename, _ = QFileDialog.getSaveFileName(self, "Export configuration", "mx-creative-control.json", "Configuration (*.json)", "", QFileDialog.Option.DontUseNativeDialog)

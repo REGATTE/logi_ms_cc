@@ -1,6 +1,30 @@
 # Validation
 
-Version 0.3.1. Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046d:c354`.
+Version 0.3.2. Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046d:c354`.
+
+## Version 0.3.2 checks
+
+All 326 Python tests and 63 Rust tests pass, along with Rust formatting and Clippy.
+Python checks include automatic login setup for source and installed
+launchers, private atomic desktop-entry writes, safe path quoting, idempotent
+updates, legacy service migration, rollback on setup/save failures, and disabled
+or stale entries. GUI tests confirm that changing this preference does not
+compile layouts, regenerate icons or contact the worker. Startup command tests
+cover success and failure without opening settings. Real GLib launches and
+`desktop-file-validate` separately verified executable paths containing spaces,
+percent signs, quotes, dollar signs, backticks and backslashes.
+
+Minimize, maximize/restore and close now sit at the top right across all eight
+page routes. Shared control ownership, navigation and close behavior are tested.
+Every page was inspected at 970×710 in light and dark themes; the new login
+setting and feedback were also checked in both themes.
+
+Login startup was enabled on this workstation and its desktop entry validated.
+All other saved preferences were preserved. Running both the CLI entry point and
+source startup launcher reused the existing worker without opening another
+settings window; the CLI imported no Qt modules. The worker retained keypad,
+virtual-input, X11 focus and tray readiness with no error. The updated settings
+window was reopened. A real logout/login has not been performed.
 
 ## Automated checks
 
@@ -10,7 +34,7 @@ portable app artwork resolution, model bindings, ring-only
 and full imports, editor persistence and drag reordering, popup cancellation,
 keyboard selection and monitor-edge placement. Rust tests cover immutable ring
 actions, single-use/expired tokens, child supervision, XInput mappings and HID++
-notification filtering. Checks pass with 292 Python tests and 63 Rust tests,
+notification filtering. The v0.3.1 baseline passed 292 Python tests and 63 Rust tests,
 plus formatting and Clippy. Package smoke includes the ring editor and validates
 that packaged udev rules match the fixed permission helper.
 
@@ -129,7 +153,7 @@ and released snapshot storage. The settings editor retains its larger preview.
 
 Frameless-window checks cover transparent rounded corners, opaque edge fill,
 native move/resize delegation, minimum-size fallback, maximizing/restoring and
-footer window controls. Closing settings stops its UI timers without contacting
+shared window controls. Closing settings stops its UI timers without contacting
 the worker. Neumorphic light/dark previews cover the device home, console,
 keypad, dialpad, G402, Applications, Action Ring and Settings pages. Known devices
 use bundled official product artwork; verified image coordinates keep dialpad

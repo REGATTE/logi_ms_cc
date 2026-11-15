@@ -105,14 +105,41 @@ class IconAction(QAbstractButton):
         painter.end()
 
 
+class AppWindowControls(QWidget):
+    """Shared window controls placed in the visible page's header."""
+
+    minimize_requested = Signal()
+    maximize_requested = Signal()
+    close_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(128, 40)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.minimize_button = IconAction("minimize", "Minimize window")
+        self.maximize_button = IconAction("maximize", "Maximize window")
+        self.close_button = IconAction("close", "Close settings")
+        for control, signal in ((self.minimize_button, self.minimize_requested),
+                                (self.maximize_button, self.maximize_requested),
+                                (self.close_button, self.close_requested)):
+            control.clicked.connect(signal)
+            layout.addWidget(control)
+
+    def set_maximized(self, maximized):
+        self.maximize_button.kind = "restore" if maximized else "maximize"
+        title = "Restore window" if maximized else "Maximize window"
+        self.maximize_button.setToolTip(title)
+        self.maximize_button.setAccessibleName(title)
+        self.maximize_button.update()
+
+
 class AppFooter(QWidget):
     """One shared action row, independent of the currently displayed page."""
 
     refresh_requested = Signal()
     settings_requested = Signal()
-    minimize_requested = Signal()
-    maximize_requested = Signal()
-    close_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,27 +166,7 @@ class AppFooter(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         layout.addStretch()
-        controls = QWidget()
-        controls.setFixedWidth(128)
-        control_layout = QHBoxLayout(controls)
-        control_layout.setContentsMargins(0, 0, 0, 0)
-        control_layout.setSpacing(4)
-        self.minimize_button = IconAction("minimize", "Minimize window")
-        self.maximize_button = IconAction("maximize", "Maximize window")
-        self.close_button = IconAction("close", "Close settings")
-        for control, signal in ((self.minimize_button, self.minimize_requested),
-                                (self.maximize_button, self.maximize_requested),
-                                (self.close_button, self.close_requested)):
-            control.clicked.connect(signal)
-            control_layout.addWidget(control)
-        layout.addWidget(controls)
-
-    def set_maximized(self, maximized):
-        self.maximize_button.kind = "restore" if maximized else "maximize"
-        title = "Restore window" if maximized else "Maximize window"
-        self.maximize_button.setToolTip(title)
-        self.maximize_button.setAccessibleName(title)
-        self.maximize_button.update()
+        layout.addSpacing(128)
 
     def set_scanning(self, scanning: bool):
         self.refresh_button.setEnabled(not scanning)
@@ -700,6 +707,7 @@ class DevicesHome(QWidget):
         layout.setContentsMargins(36, 30, 36, 24)
         layout.setSpacing(12)
         heading = QHBoxLayout()
+        self.header_layout = heading
         heading.addWidget(_label("Your devices", "homeTitle"))
         heading.addStretch()
         layout.addLayout(heading)
@@ -796,6 +804,7 @@ class ConsoleDevices(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         header = QHBoxLayout()
+        self.header_layout = header
         header.setContentsMargins(24, 20, 28, 14)
         self.back_button = QPushButton("←")
         self.back_button.setObjectName("topbarButton")
