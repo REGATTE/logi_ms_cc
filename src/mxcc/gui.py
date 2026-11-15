@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,13 +10,15 @@ from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QMessageBox, QPushButton, QScrollArea, QStackedWidget,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__, ipc, service
 from .applications import discover_applications
+from .action_picker import ActionPicker
+from .actions import compile_entry, launcher_available, launcher_entry, profile_entry_action
 from .application_views import ApplicationCard
 from .appearance import AppearanceController
 from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
@@ -27,9 +30,10 @@ from .icons import FaceRenderer, display_icon, setup_icon_theme
 from .key_button import KeyButton
 from .paths import cache_dir, profiles_dir, runtime_path
 from .profile_editor import ProfileEditor
-from .profiles import ProfileExistsError, atomic_json, import_profile, load_profiles
+from .profiles import ProfileExistsError, atomic_json, import_profile, load_profiles, validate_profile
 from .ring_editor import RingEditor
 from .transfer import export_bundle, read_bundle, write_imported_profiles
+from .window_frame import RoundedWindow
 
 
 def label(text: str, kind: str = "", wrap: bool = False) -> QLabel:
@@ -55,7 +59,7 @@ class _StatusNotice(QLabel):
         self.setVisible(bool(text))
 
 
-class MainWindow(QMainWindow):
+class MainWindow(RoundedWindow):
     def __init__(self, *, connect_worker: bool = True, applications=None, devices=None,
                  ring_layout=None, add_ring_action=False):
         super().__init__()
@@ -93,6 +97,11 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.footer)
         self.footer.refresh_requested.connect(lambda: self.refresh_devices(explicit=True))
         self.footer.settings_requested.connect(self.show_settings)
+        self.footer.minimize_requested.connect(self.showMinimized)
+        self.footer.maximize_requested.connect(self.toggle_maximized)
+        self.footer.close_requested.connect(self.close)
+        self.window_state_changed.connect(
+            lambda: self.footer.set_maximized(self.isMaximized() or self.isFullScreen()))
         self.home = DevicesHome()
         self.views.addWidget(self.home)
         self.home.device_selected.connect(self.open_device)
@@ -147,9 +156,9 @@ class MainWindow(QMainWindow):
         content.addWidget(self.notice)
         self.navigation.currentRowChanged.connect(self._navigate_editor)
         self.navigation.setCurrentRow(0)
-        self.details = DeviceDetails()
+        self.details = DeviceDetails(applications=self.apps)
         self.details.back_requested.connect(self._back_to_devices)
-        self.details.assignment_changed.connect(self.assign_ring_button)
+        self.details.mapping_changed.connect(self.assign_device_action)
         self.details.edit_ring_requested.connect(self.show_ring)
         self.views.addWidget(self.details)
         self.ring_page = QWidget()
@@ -175,7 +184,7 @@ class MainWindow(QMainWindow):
         ring_scroll.setWidget(self.ring_editor)
         ring_page_layout.addWidget(ring_scroll, 1)
         self.views.addWidget(self.ring_page)
-        self.details.set_bindings(self.settings["action_ring"]["bindings"])
+        self._refresh_device_actions()
         self._populate_apps()
         self.persist(notify=False)
         self.refresh_keys()
@@ -204,6 +213,9 @@ class MainWindow(QMainWindow):
             self.show_ring(ring_layout, add_action=add_ring_action)
         else:
             self.show_home()
+        for region in (root, self.footer, self.home, self.console, self.editor,
+                       self.details, self.ring_page, self.settings_page):
+            self.mark_drag_region(region)
 
     def refresh_devices(self, *, explicit=False):
         if self.device_scanner is not None:
@@ -288,25 +300,35 @@ class MainWindow(QMainWindow):
     def save_ring(self):
         try:
             self.persist(settings={**self.settings, "action_ring": self.ring_editor.value()})
-            self.details.set_bindings(self.settings["action_ring"]["bindings"])
+            self._refresh_device_actions()
         except (OSError, ValueError, RuntimeError) as exc:
             self.ring_editor.set_settings(self.settings)
             QMessageBox.warning(self, "Could not save Action Ring", str(exc))
 
     def assign_ring_button(self, control_id, assigned):
+        entry = {"label": "Action Ring", "icon": "view-grid", "action": {"type": "open_ring"}} if assigned else None
+        self.assign_device_action(control_id, entry)
+
+    def _refresh_device_actions(self):
+        self.details.set_actions(self.settings.get("device_actions", []), self.settings["action_ring"]["bindings"])
+
+    def assign_device_action(self, control_id, entry):
         device = self.devices.get(self.selected_device_id)
         if device is None:
             return
         binding = {"vendor_id": device.vendor_id, "product_id": device.product_id, "control_id": control_id}
         ring = self.settings["action_ring"]
         bindings = [item for item in ring["bindings"] if item != binding]
-        if assigned:
-            bindings.append(binding)
+        actions = [item for item in self.settings.get("device_actions", [])
+                   if any(item[key] != value for key, value in binding.items())]
+        if entry is not None:
+            actions.append({**binding, **entry})
         try:
-            self.persist(settings={**self.settings, "action_ring": {**ring, "bindings": bindings}})
+            self.persist(settings={**self.settings, "device_actions": actions,
+                                   "action_ring": {**ring, "bindings": bindings}})
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.warning(self, "Could not save button assignment", str(exc))
-        self.details.set_bindings(self.settings["action_ring"]["bindings"])
+        self._refresh_device_actions()
 
     def preview_ring(self):
         if not self.connect_worker:
@@ -434,43 +456,25 @@ class MainWindow(QMainWindow):
         self.inspector = widget.library
         side = widget.panel
         side.addWidget(label("ALL ACTIONS", "section"))
-        self.launcher_search = QLineEdit()
-        self.launcher_search.setObjectName("editorSearch")
-        self.launcher_search.setPlaceholderText("Search applications and actions")
-        self.launcher_search.setClearButtonEnabled(True)
-        self.launcher_search.textChanged.connect(self._filter_launcher_actions)
-        side.addWidget(self.launcher_search)
-        self.key_action_title = label("Application", "section")
+        self.key_action_title = label("Choose an action", "section")
         side.addWidget(self.key_action_title)
-        self.key_description = label("Choose an app or a system action for this key.", "muted", True)
+        self.key_description = label("Choose an action below, then apply it to this key.", "muted", True)
         side.addWidget(self.key_description)
-        self.app_combo = QComboBox(widget)
-        self.app_combo.hide()  # Selection model shared with import and profile actions.
-        self.app_combo.currentIndexChanged.connect(self._sync_launcher_action)
-        self.launcher_actions = QListWidget()
-        self.launcher_actions.setObjectName("editorApps")
-        self.launcher_actions.setIconSize(QSize(24, 24))
-        self.launcher_actions.setMinimumHeight(80)
-        self.launcher_actions.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.launcher_actions.currentRowChanged.connect(self.app_combo.setCurrentIndex)
-        side.addWidget(self.launcher_actions, 1)
-        self.launcher_no_results = label("No matching applications or actions", "muted", True)
-        self.launcher_no_results.hide()
-        side.addWidget(self.launcher_no_results)
-        self.shortcut_preview = QWidget()
-        shortcut_preview_layout = QVBoxLayout(self.shortcut_preview)
-        shortcut_preview_layout.setContentsMargins(0, 6, 0, 0)
-        self.shortcut_name = label("", "section", True)
-        self.shortcut_keys = label("", "muted", True)
-        shortcut_preview_layout.addWidget(self.shortcut_name)
-        shortcut_preview_layout.addWidget(self.shortcut_keys)
-        shortcut_preview_layout.addStretch()
-        side.addWidget(self.shortcut_preview, 1)
+        self.key_picker = ActionPicker(self.apps)
+        self.app_combo = self.key_picker.app_combo
+        self.launcher_search = self.key_picker.search_edit
+        self.launcher_actions = self.key_picker.app_list
+        self.launcher_no_results = self.key_picker.no_results
+        side.addWidget(self.key_picker, 1)
         self.active_label = label("Active application: —", "muted", True)
         side.addWidget(self.active_label)
         self.apply_button = button("Apply to key", self.apply_key)
         self.apply_button.setObjectName("editorApply")
-        side.addWidget(self.apply_button)
+        action_buttons = QHBoxLayout()
+        self.clear_key_button = button("Remove", self.clear_key)
+        action_buttons.addWidget(self.clear_key_button)
+        action_buttons.addWidget(self.apply_button, 1)
+        side.addLayout(action_buttons)
         self.import_button = button("Import shortcuts…", self.import_shortcuts)
         self.edit_button = button("Edit shortcuts…", self.edit_shortcuts)
         shortcuts = QHBoxLayout()
@@ -483,6 +487,7 @@ class MainWindow(QMainWindow):
         self.use_shortcuts_button = button("Use shortcuts on keypad", self.use_preview_profile)
         side.addWidget(self.use_shortcuts_button)
         side.addWidget(button("Follow active app", self.follow_active_app))
+        self.key_picker.changed.connect(self._refresh_action_buttons)
         scroll = QScrollArea()
         scroll.setObjectName("editorScroll")
         scroll.setWidgetResizable(True)
@@ -644,29 +649,15 @@ class MainWindow(QMainWindow):
     def _populate_apps(self):
         if self.preview_profile_id not in self.profiles:
             self.preview_profile_id = "default"
-        self.app_combo.blockSignals(True)
-        self.app_combo.clear()
-        self.app_combo.addItem("Empty key", None)
-        self.app_combo.addItem(display_icon("applets-screenshooter"), "Screenshot", "@screenshot")
-        self.app_combo.addItem(display_icon("view-grid"), "Open Action Ring", "@action-ring")
-        for app in self.apps:
-            self.app_combo.addItem(display_icon(app.icon, application=True), app.name, app.id)
-        self.app_combo.blockSignals(False)
-        self.launcher_actions.blockSignals(True)
-        self.launcher_actions.clear()
-        for index in range(self.app_combo.count()):
-            item = QListWidgetItem(self.app_combo.itemIcon(index), self.app_combo.itemText(index))
-            item.setData(Qt.ItemDataRole.UserRole, self.app_combo.itemData(index))
-            self.launcher_actions.addItem(item)
-        self.launcher_actions.blockSignals(False)
-        self._filter_launcher_actions(self.launcher_search.text())
+        self.key_picker.set_applications(self.apps)
         self._populate_application_cards()
         self.select_key(self.selected_slot)
         self._populate_profile_strip()
 
     def _populate_application_cards(self):
         indexed = {app.id: app for app in self.apps}
-        identifiers = list(dict.fromkeys(identifier for identifier in self.settings["launchers"]
+        assigned_ids = [self._launcher_id(value) for value in self.settings["launchers"]]
+        identifiers = list(dict.fromkeys(identifier for identifier in assigned_ids
                                         if identifier == "@screenshot" or identifier in indexed))
         for card in self.application_cards.values():
             self.application_cards_layout.removeWidget(card)
@@ -676,7 +667,7 @@ class MainWindow(QMainWindow):
         for identifier in identifiers:
             app = indexed.get(identifier)
             system_action = identifier == "@screenshot"
-            slots = [index + 1 for index, value in enumerate(self.settings["launchers"]) if value == identifier]
+            slots = [index + 1 for index, value in enumerate(assigned_ids) if value == identifier]
             card = ApplicationCard(identifier, "Screenshot" if system_action else app.name,
                                    display_icon("applets-screenshooter") if system_action else display_icon(app.icon, application=True),
                                    slots, system_action=system_action)
@@ -717,7 +708,8 @@ class MainWindow(QMainWindow):
         chip("All applications · launcher", None, None)
         indexed = {app.id: app for app in self.apps}
         added = set()
-        for app_id in self.settings["launchers"]:
+        for value in self.settings["launchers"]:
+            app_id = self._launcher_id(value)
             app = indexed.get(app_id)
             profile = profile_for_app(app, self.profiles, self.settings["profile_assignments"]) if app else None
             if profile and profile["id"] not in added:
@@ -753,23 +745,12 @@ class MainWindow(QMainWindow):
         self.launcher_search.clear()
         self.launcher_search.setFocus()
 
-    def _filter_launcher_actions(self, text):
-        query = text.strip().casefold()
-        visible = 0
-        for index in range(self.launcher_actions.count()):
-            item = self.launcher_actions.item(index)
-            matches = query in f"{item.text()} {item.data(Qt.ItemDataRole.UserRole) or ''}".casefold()
-            item.setHidden(not matches)
-            visible += matches
-        self.launcher_no_results.setVisible(not visible and self.page == 0)
-
-    def _sync_launcher_action(self, index):
-        self.launcher_actions.blockSignals(True)
-        self.launcher_actions.setCurrentRow(index)
-        if self.launcher_actions.currentItem() is not None:
-            self.launcher_actions.scrollToItem(self.launcher_actions.currentItem())
-        self.launcher_actions.blockSignals(False)
-        self._refresh_action_buttons()
+    @staticmethod
+    def _launcher_id(value):
+        if isinstance(value, dict):
+            action = value["action"]
+            return action.get("desktop_id") if action["type"] == "launch" else "@screenshot" if action["type"] == "screenshot" else None
+        return value
 
     def fill_profile_combo(self, combo, app_id):
         combo.blockSignals(True)
@@ -783,12 +764,18 @@ class MainWindow(QMainWindow):
         combo.blockSignals(False)
 
     def _refresh_action_buttons(self):
-        self.import_button.setEnabled(self.page == 0 and self.selected_app() is not None)
-        self.edit_button.setEnabled(self.page == 1 or self.selected_app() is not None)
+        can_import = self.page == 0 and self.selected_app() is not None
+        can_edit = self.page == 1 or self.selected_app() is not None
+        self.import_button.setEnabled(can_import)
+        self.import_button.setVisible(can_import)
+        self.edit_button.setEnabled(can_edit)
+        self.edit_button.setVisible(can_edit)
         self.use_shortcuts_button.setEnabled(self.page == 1)
         self.use_shortcuts_button.setVisible(self.page == 1)
 
     def selected_app(self):
+        if self.key_picker.kind_combo.currentData() != "launch":
+            return None
         app_id = self.app_combo.currentData()
         return next((app for app in self.apps if app.id == app_id), None)
 
@@ -797,24 +784,17 @@ class MainWindow(QMainWindow):
         for index, key in enumerate(self.key_buttons):
             key.setChecked(index == slot)
         self.inspector.setAccessibleName(f"Key {slot + 1} settings")
-        app_id = self.settings["launchers"][slot]
-        self.app_combo.setCurrentIndex(max(0, self.app_combo.findData(app_id)))
-        self._sync_launcher_action(self.app_combo.currentIndex())
-        self._refresh_action_buttons()
-        self.key_action_title.setText("Application" if self.page == 0 else "Shortcut")
-        self.key_description.setText("Choose an app or a system action for this key." if self.page == 0 else "Edit this app’s shortcuts to change its keys.")
-        self.app_combo.setEnabled(self.page == 0)
-        self.launcher_actions.setVisible(self.page == 0)
-        self.launcher_search.setVisible(self.page == 0)
-        self.shortcut_preview.setVisible(self.page == 1)
-        if self.page == 1:
+        if self.page == 0:
+            entry = launcher_entry(self.settings["launchers"][slot], self.apps)
+        else:
             profile = self.profiles.get(self.preview_profile_id, self.profiles.get("default", {}))
-            shortcut = next((item for item in profile.get("shortcuts", []) if item["slot"] == slot + 1), {})
-            self.shortcut_name.setText(shortcut.get("label", "Not assigned"))
-            self.shortcut_keys.setText(shortcut.get("keys", "Use Edit shortcuts to add an action here."))
-        self._filter_launcher_actions(self.launcher_search.text())
-        self.apply_button.setEnabled(self.page == 0)
-        self.apply_button.setVisible(self.page == 0)
+            shortcut = next((item for item in profile.get("shortcuts", []) if item["slot"] == slot + 1), None)
+            entry = profile_entry_action(shortcut) if shortcut else None
+        self.key_picker.set_entry(entry)
+        self.key_action_title.setText(entry["label"] if entry else "Choose an action")
+        self.key_description.setText("Choose an action below, then apply it to this key.")
+        self.clear_key_button.setEnabled(entry is not None)
+        self._refresh_action_buttons()
 
     def change_page(self, page):
         self.page = page
@@ -868,8 +848,15 @@ class MainWindow(QMainWindow):
             keys = [None] * 9
             if profile:
                 renderer = FaceRenderer(self.settings["show_labels"])
+                selections = {app.id: profile_for_app(app, self.profiles, self.settings["profile_assignments"])
+                              for app in self.apps}
+                indexed = {app.id: app for app in self.apps}
                 for shortcut in profile["shortcuts"]:
-                    keys[shortcut["slot"] - 1] = {"label": shortcut["label"], "image": renderer(shortcut["label"], shortcut["icon"])}
+                    entry = compile_entry(profile_entry_action(shortcut), self.apps, selections)
+                    if entry is not None:
+                        app = indexed.get(entry["action"].get("desktop_id"))
+                        keys[shortcut["slot"] - 1] = {"label": entry["label"],
+                            "image": renderer(entry["label"], entry["icon"], app)}
         for key, entry in zip(self.key_buttons, keys):
             key.setIcon(QIcon(str(cache_dir() / entry["image"])) if entry else QIcon())
             key.setText("" if entry else "+")
@@ -911,12 +898,34 @@ class MainWindow(QMainWindow):
         self.refresh_keys()
 
     def apply_key(self):
+        try:
+            entry = self.key_picker.value()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Choose a valid action", str(exc))
+            return
+        self._store_key(entry)
+
+    def clear_key(self):
+        self._store_key(None)
+
+    def _store_key(self, entry):
+        if self.page == 1:
+            self._store_profile_key(entry)
+            return
         launchers = list(self.settings["launchers"])
-        launchers[self.selected_slot] = self.app_combo.currentData()
+        value = entry
+        if entry is not None:
+            action = entry["action"]
+            if action["type"] == "launch":
+                value = action["desktop_id"]
+            elif action["type"] == "screenshot":
+                value = "@screenshot"
+            elif action["type"] == "open_ring":
+                value = "@action-ring"
+        launchers[self.selected_slot] = value
         candidate = {**self.settings, "launchers": launchers,
                      "profile_assignments": dict(self.settings["profile_assignments"])}
-        available = {app.id for app in self.apps} | {"@screenshot", "@action-ring"}
-        selected = sum(app_id in available for app_id in launchers[:self.selected_slot])
+        selected = sum(launcher_available(item, self.apps) for item in launchers[:self.selected_slot])
         try:
             self.persist(settings=candidate)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -924,6 +933,47 @@ class MainWindow(QMainWindow):
             return
         self.select_key(selected)
         self._populate_apps()
+
+    def _store_profile_key(self, entry):
+        profile = self.profiles.get(self.preview_profile_id)
+        if profile is None:
+            return
+        shortcuts = [item for item in profile["shortcuts"] if item["slot"] != self.selected_slot + 1]
+        if entry is not None:
+            item = {"slot": self.selected_slot + 1, **entry}
+            if entry["action"]["type"] == "shortcut":
+                item.pop("action")
+                item["keys"] = entry["action"]["keys"]
+            shortcuts.append(item)
+        previous_profiles = self.profiles
+        destination = profiles_dir() / f"{profile['id']}.json"
+        written = False
+        previous = None
+        try:
+            profile = validate_profile({**profile, "shortcuts": shortcuts})
+            profiles = {**self.profiles, profile["id"]: profile}
+            compile_runtime(self.settings, self.apps, profiles, FaceRenderer(self.settings["show_labels"]))
+            previous = destination.read_bytes() if destination.exists() else None
+            atomic_json(destination, profile)
+            written = True
+            self.profiles = profiles
+            self.persist()
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.profiles = previous_profiles
+            message = str(exc)
+            if written:
+                try:
+                    if previous is None:
+                        destination.unlink(missing_ok=True)
+                    else:
+                        atomic_json(destination, json.loads(previous))
+                except (OSError, ValueError) as rollback:
+                    message += f"\nCould not restore the previous profile file: {rollback}"
+            QMessageBox.warning(self, "Could not save key action", message)
+            return
+        self.select_key(self.selected_slot)
+        self._populate_application_cards()
+        self._populate_profile_strip()
 
     def move_launcher(self, source, destination):
         """Insert the dragged app at a key; dropping past the last app appends."""
@@ -976,6 +1026,7 @@ class MainWindow(QMainWindow):
         self.safe_save()
         self._populate_apps()
         self.ring_editor.set_applications(self.apps)
+        self.details.set_applications(self.apps)
         self.notice.setText(f"Found {len(self.apps)} installed applications.")
 
     def filter_apps(self, text):
@@ -1101,7 +1152,7 @@ class MainWindow(QMainWindow):
             self.persist()
             self._populate_apps()
             self.ring_editor.set_settings(self.settings)
-            self.details.set_bindings(self.settings["action_ring"]["bindings"])
+            self._refresh_device_actions()
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.warning(self, "Import failed", str(exc))
 

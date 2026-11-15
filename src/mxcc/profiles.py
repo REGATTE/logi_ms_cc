@@ -77,7 +77,8 @@ def validate_profile(data: Any) -> dict:
     normalized["shortcuts"] = []
     slots: set[int] = set()
     for shortcut in shortcuts:
-        shortcut = _fields(shortcut, {"slot", "label", "keys"}, {"icon"}, "shortcut")
+        mixed_action = isinstance(shortcut, dict) and "action" in shortcut
+        shortcut = _fields(shortcut, {"slot", "label", "action" if mixed_action else "keys"}, {"icon"}, "shortcut")
         slot = shortcut["slot"]
         if type(slot) is not int or not 1 <= slot <= 9 or slot in slots:
             raise ProfileError("Shortcut slots must be unique integers from 1 to 9")
@@ -85,6 +86,14 @@ def validate_profile(data: Any) -> dict:
         icon = shortcut.get("icon", "input-keyboard")
         if not isinstance(icon, str) or not ICON_PATTERN.fullmatch(icon):
             raise ProfileError("Shortcut icon must be an icon theme name, without a path")
+        if mixed_action:
+            from .actions import validate_action_entry
+            try:
+                entry = validate_action_entry({"label": shortcut["label"], "icon": icon, "action": shortcut["action"]})
+            except ValueError as error:
+                raise ProfileError(str(error)) from error
+            normalized["shortcuts"].append({"slot": slot, **entry})
+            continue
         try:
             keys = normalize_shortcut(shortcut["keys"])
         except ValueError as error:

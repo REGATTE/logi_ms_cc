@@ -1,12 +1,15 @@
 """Device discovery stays off the UI thread and ends with the settings process."""
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QRunnable, QSize, QThreadPool, Qt, Signal, Slot
+from copy import deepcopy
+
+from PySide6.QtCore import QObject, QPointF, QRunnable, QSize, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QPainter, QPalette, QPen, QPolygonF
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
+from .action_picker import ActionPicker
 from .customization import CustomizationWorkspace
 from .device_views import ConnectionIndicator
 from .device_interaction import InteractiveDeviceArt
@@ -78,53 +81,24 @@ class _AssignmentCombo(QComboBox):
         painter.end()
 
 
-class _ControlRow(QFrame):
-    selected = Signal(str)
-
-    def __init__(self, control, parent=None):
-        super().__init__(parent)
-        self.control_id = control.id
-        self.setObjectName("deviceControlRow")
-        self.setProperty("selected", False)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAccessibleName(control.label)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.setFocus(Qt.FocusReason.MouseFocusReason)
-            self.selected.emit(self.control_id)
-        super().mousePressEvent(event)
-
-    def focusInEvent(self, event):
-        super().focusInEvent(event)
-        self.selected.emit(self.control_id)
-
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.selected.emit(self.control_id)
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-    def eventFilter(self, watched, event):
-        if event.type() in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress):
-            self.selected.emit(self.control_id)
-        return super().eventFilter(watched, event)
-
-
 class DeviceDetails(QWidget):
     """Discovered controls with unassigned options, plus connection facts."""
 
     back_requested = Signal()
-    assignment_changed = Signal(str, bool)
+    assignment_changed = Signal(str, bool)  # Compatibility for older integrations.
+    mapping_changed = Signal(str, object)
     edit_ring_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, applications=()):
         super().__init__(parent)
         self.setObjectName("deviceDetails")
         self._bindings = []
+        self._actions = []
         self._device = None
+        self._backend_error = ""
+        self.controls = {}
+        self.selected_control = None
+        self._controls_key = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 16, 12, 0)
         layout.setSpacing(12)
@@ -215,13 +189,14 @@ class DeviceDetails(QWidget):
         self.controls_count.setObjectName("muted")
         heading.addWidget(self.controls_count, 0, Qt.AlignmentFlag.AlignTop)
         panel.addLayout(heading)
-        self.search_edit = QLineEdit()
-        self.search_edit.setObjectName("editorSearch")
-        self.search_edit.setPlaceholderText("Search controls")
-        self.search_edit.setAccessibleName("Search device controls")
-        self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.textChanged.connect(self._filter_controls)
-        panel.addWidget(self.search_edit)
+        self.control_selector = _AssignmentCombo()
+        self.control_selector.setObjectName("deviceControlAssignment")
+        self.control_selector.setAccessibleName("Device control to configure")
+        self.control_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.control_selector.setMinimumContentsLength(12)
+        self.control_selector.currentIndexChanged.connect(
+            lambda _: self.select_control(self.control_selector.currentData()))
+        panel.addWidget(self.control_selector)
         self.selected_title = QLabel("Choose a control")
         self.selected_title.setObjectName("section")
         self.selected_title.setWordWrap(True)
@@ -230,48 +205,36 @@ class DeviceDetails(QWidget):
         self.explanation.setObjectName("muted")
         self.explanation.setWordWrap(True)
         panel.addWidget(self.explanation)
-        self.controls_scroll = QScrollArea()
-        self.controls_scroll.setObjectName("editorScroll")
-        self.controls_scroll.setWidgetResizable(True)
-        self.controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.controls_content = QWidget()
-        self.controls_content.setObjectName("editorCategories")
-        self.controls_layout = QVBoxLayout(self.controls_content)
-        self.controls_layout.setContentsMargins(0, 4, 4, 0)
-        self.controls_layout.setSpacing(14)
-        self.controls_layout.addStretch()
-        self.controls_scroll.setWidget(self.controls_content)
-        panel.addWidget(self.controls_scroll, 1)
+        self.picker = ActionPicker(applications)
+        self.picker.changed.connect(lambda: self.error_label.hide())
+        panel.addWidget(self.picker, 1)
         self.controls_empty = QLabel("Ubuntu has not reported any assignable controls for this device.")
         self.controls_empty.setObjectName("muted")
         self.controls_empty.setWordWrap(True)
         self.controls_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         panel.addWidget(self.controls_empty, 1)
-        self.no_results = QLabel("No matching controls")
-        self.no_results.setObjectName("muted")
-        self.no_results.setWordWrap(True)
-        self.no_results.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.no_results.hide()
-        panel.addWidget(self.no_results, 1)
         self.blocked_space = QWidget()
         panel.addWidget(self.blocked_space, 1)
         self.blocked_space.hide()
-        self.mapping_combos = {}
-        self.control_rows = {}
-        self.control_labels = {}
-        self.control_groups = []
-        self.selected_control = None
-        self._controls_key = None
+        self.error_label = QLabel()
+        self.error_label.setObjectName("status")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        panel.addWidget(self.error_label)
+        actions = QHBoxLayout()
+        self.clear_button = QPushButton("Remove")
+        self.clear_button.clicked.connect(self.clear_mapping)
+        actions.addWidget(self.clear_button)
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.setObjectName("editorApply")
+        self.apply_button.clicked.connect(self.apply_mapping)
+        actions.addWidget(self.apply_button, 1)
+        panel.addLayout(actions)
         self.edit_ring_button = QPushButton("Edit Action Ring")
-        self.edit_ring_button.setObjectName("editorApply")
-        self.edit_ring_button.setToolTip("Customize the actions shown by this device's assigned ring buttons")
+        self.edit_ring_button.setToolTip("Customize the actions shown by this assigned ring button")
         self.edit_ring_button.clicked.connect(self.edit_ring_requested)
         panel.addWidget(self.edit_ring_button)
         self.edit_ring_button.hide()
-        self.save_hint = QLabel("Changes save automatically")
-        self.save_hint.setObjectName("muted")
-        panel.addWidget(self.save_hint)
         scroll = QScrollArea()
         scroll.setObjectName("editorScroll")
         scroll.setWidgetResizable(True)
@@ -283,6 +246,9 @@ class DeviceDetails(QWidget):
         self.facts.setVisible(visible)
         self.info_button.setArrowType(Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow)
 
+    def set_applications(self, applications):
+        self.picker.set_applications(applications)
+
     def _set_controls(self, device, *, blocked):
         controls = tuple(getattr(device, "controls", ())) if not blocked else ()
         key = (device.id, controls, blocked)
@@ -291,149 +257,128 @@ class DeviceDetails(QWidget):
         same_device = self._controls_key and self._controls_key[0] == device.id
         selection = self.selected_control if same_device else None
         if not same_device:
-            self.search_edit.blockSignals(True)
-            self.search_edit.clear()
-            self.search_edit.blockSignals(False)
             self.info_button.setChecked(False)
+            self._backend_error = ""
         self._controls_key = key
-        self.mapping_combos = {}
-        self.control_rows = {}
+        self.controls = {control.id: control for control in controls}
         self.control_labels = {control.id: control.label for control in controls}
-        self.control_groups = []
-        while self.controls_layout.count() > 1:
-            item = self.controls_layout.takeAt(0)
-            item.widget().hide()
-            item.widget().deleteLater()
-        groups = {"Buttons": [], "Dials & wheels": [], "Keys": [], "Other controls": []}
+        self.control_selector.blockSignals(True)
+        self.control_selector.clear()
+        self.control_selector.addItem("Choose a control", None)
         for control in controls:
-            group = ("Buttons" if control.kind == "button" else
-                     "Dials & wheels" if control.kind in ("wheel", "dial", "scroll", "axis") else
-                     "Keys" if control.kind == "key" else "Other controls")
-            groups[group].append(control)
-        for title, members in groups.items():
-            if not members:
-                continue
-            group = QWidget()
-            group_layout = QVBoxLayout(group)
-            group_layout.setContentsMargins(0, 0, 0, 0)
-            group_layout.setSpacing(8)
-            caption = QLabel(title)
-            caption.setObjectName("section")
-            group_layout.addWidget(caption)
-            for control in members:
-                row = _ControlRow(control)
-                row.selected.connect(self.select_control)
-                row_layout = QVBoxLayout(row)
-                row_layout.setContentsMargins(10, 9, 10, 9)
-                row_layout.setSpacing(5)
-                name = QLabel(control.label)
-                name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-                name.setWordWrap(True)
-                name.setMinimumWidth(80)
-                name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-                row_layout.addWidget(name)
-                combo = _AssignmentCombo()
-                combo.setObjectName("deviceControlAssignment")
-                combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                combo.setPlaceholderText("Not assigned")
-                combo.setAccessibleName(f"Action for {control.label}")
-                supported = (control.kind == "button" and (
-                    (device.vendor_id, device.product_id) in ((0x046d, 0xc07e), (0x046d, 0xbc00))
-                    or control.id in {f"key:{code}" for code in range(0x110, 0x117)}))
-                if supported:
-                    combo.addItem("Not assigned", False)
-                    combo.addItem("Open Action Ring", True)
-                    combo.currentIndexChanged.connect(
-                        lambda index, identifier=control.id, picker=combo:
-                        self.assignment_changed.emit(identifier, bool(picker.currentData())))
-                    combo.setToolTip("Press once to open the ring; press again to close. X11 required.")
-                else:
-                    combo.setToolTip("Actions for this control are not available yet.")
-                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-                combo.setMinimumContentsLength(12)
-                combo.installEventFilter(row)
-                row_layout.addWidget(combo)
-                group_layout.addWidget(row)
-                self.mapping_combos[control.id] = combo
-                self.control_rows[control.id] = row
-            self.controls_layout.insertWidget(self.controls_layout.count() - 1, group)
-            self.control_groups.append((title, group, tuple(control.id for control in members)))
+            self.control_selector.addItem(control.label, control.id)
+        self.control_selector.blockSignals(False)
         self.controls_count.setText(f"{len(controls)} {'input' if len(controls) == 1 else 'inputs'}")
         self.controls_count.setVisible(bool(controls))
-        self.search_edit.setVisible(bool(controls))
+        self.control_selector.setVisible(bool(controls))
         self.selected_title.setVisible(bool(controls))
-        self.save_hint.setVisible(any(combo.count() for combo in self.mapping_combos.values()))
+        self.picker.setVisible(bool(controls))
+        self.apply_button.setVisible(bool(controls))
+        self.clear_button.setVisible(bool(controls))
         self.controls_empty.setVisible(not controls and not blocked)
         self.blocked_space.setVisible(blocked)
-        self.selected_control = None
-        self.select_control(selection if selection in self.control_rows else None)
         self.selection_label.setVisible(bool(controls))
-        self.set_bindings(self._bindings)
-        self._filter_controls(self.search_edit.text())
+        if not same_device or selection not in self.controls:
+            self.selected_control = None
+            self.picker.set_entry(None)
+        self.select_control(selection if selection in self.controls else None)
 
-    def _filter_controls(self, text):
-        query = text.strip().casefold()
-        visible_count = 0
-        for title, group, identifiers in self.control_groups:
-            group_visible = False
-            for identifier in identifiers:
-                visible = not query or query in f"{title} {self.control_labels[identifier]}".casefold()
-                self.control_rows[identifier].setVisible(visible)
-                visible_count += visible
-                group_visible |= visible
-            group.setVisible(group_visible)
-        self.controls_scroll.setVisible(bool(visible_count))
-        self.no_results.setVisible(bool(self.control_rows) and not visible_count)
+    def _entry_for(self, identifier):
+        if self._device is None or identifier is None:
+            return None
+        target = (self._device.vendor_id, self._device.product_id, identifier)
+        for entry in self._actions:
+            if (entry["vendor_id"], entry["product_id"], entry["control_id"]) == target:
+                return {name: deepcopy(entry[name]) for name in ("label", "icon", "action")}
+        if any((item["vendor_id"], item["product_id"], item["control_id"]) == target for item in self._bindings):
+            return {"label": "Action Ring", "icon": "view-grid", "action": {"type": "open_ring"}}
+        return None
+
+    def set_actions(self, device_actions, ring_bindings=()):
+        previous = self._entry_for(self.selected_control)
+        self._actions = deepcopy(list(device_actions))
+        self._bindings = deepcopy(list(ring_bindings))
+        current = self._entry_for(self.selected_control)
+        if current != previous:
+            self.picker.set_entry(current)
+            self.error_label.hide()
+        self._refresh_controls()
 
     def set_bindings(self, bindings):
-        self._bindings = list(bindings)
-        if self._device is None:
-            return
-        assigned = {item["control_id"] for item in bindings
-                    if (item["vendor_id"], item["product_id"]) ==
-                    (self._device.vendor_id, self._device.product_id)}
-        for control_id, combo in self.mapping_combos.items():
-            if combo.count():
-                combo.blockSignals(True)
-                combo.setCurrentIndex(1 if control_id in assigned else 0)
-                combo.blockSignals(False)
-        self.edit_ring_button.setVisible(any(
-            combo.currentData() is True for combo in self.mapping_combos.values()))
+        self.set_actions(self._actions, bindings)
+
+    def _supported(self, identifier):
+        control = self.controls.get(identifier)
+        if control is None or control.kind != "button" or self._device.vendor_id != 0x046d:
+            return False
+        product = self._device.product_id
+        if product == 0xc07e:
+            return identifier in ("button:4", "button:5")
+        if product == 0xbc00:
+            return identifier in ("button:1", "button:2", "button:3", "button:4")
+        return identifier in {f"key:{code}" for code in range(0x110, 0x117)}
 
     def set_backend_status(self, error):
-        if self._device is not None and not self._device.supported:
-            self.explanation.setText(error or self._assignment_explanation())
-            self.explanation.setVisible(bool(self.explanation.text()))
+        self._backend_error = error or ""
+        if self.controls:
+            self._refresh_controls()
 
-    def _assignment_explanation(self):
-        if not self.mapping_combos:
-            return ""
-        if any(combo.count() for combo in self.mapping_combos.values()):
-            return "Assign a button to open your Action Ring. Wheels and other actions will be available later."
-        return "Controls reported by Ubuntu are listed below. Mapping actions are not available yet."
+    def _refresh_controls(self):
+        identifier = self.selected_control
+        supported = self._supported(identifier)
+        entry = self._entry_for(identifier)
+        self.picker.setEnabled(supported)
+        self.apply_button.setEnabled(supported)
+        self.clear_button.setEnabled(supported and entry is not None)
+        self.edit_ring_button.setVisible(bool(entry and entry["action"]["type"] == "open_ring"))
+        if not self.controls:
+            return
+        if identifier is None:
+            message = "Select a control on the device or from the list above."
+        elif not supported:
+            message = ("Dial and roller movement mappings are not available yet."
+                       if self.controls[identifier].kind in ("dial", "wheel", "scroll", "axis")
+                       else "Mapping actions for this control are not available yet.")
+        else:
+            message = self._backend_error or "Choose an action below, then Apply. Button mappings require X11."
+        self.explanation.setText(message)
+        self.explanation.setVisible(bool(message))
 
     def select_control(self, identifier):
-        if identifier is not None and identifier not in self.control_rows:
+        if identifier is not None and identifier not in self.controls:
             return
+        changed = identifier != self.selected_control
         self.selected_control = identifier
-        for control_id, row in self.control_rows.items():
-            selected = control_id == identifier
-            if row.property("selected") != selected:
-                row.setProperty("selected", selected)
-                row.style().unpolish(row)
-                row.style().polish(row)
-                row.update()
+        self.control_selector.blockSignals(True)
+        self.control_selector.setCurrentIndex(max(0, self.control_selector.findData(identifier)))
+        self.control_selector.blockSignals(False)
         self.art.set_selected_control(identifier)
+        if changed:
+            self.picker.set_entry(self._entry_for(identifier))
+            self.error_label.hide()
         if identifier is not None:
-            if self.control_rows[identifier].isHidden():
-                self.search_edit.clear()
             self.selected_title.setText(self.control_labels[identifier])
             self.selection_label.setText(f"Selected: {self.control_labels[identifier]}")
-            self.controls_scroll.ensureWidgetVisible(self.control_rows[identifier], 0, 16)
         else:
             self.selected_title.setText("Choose a control")
             self.selection_label.setText("Select a control on the device or in the list."
                                          if self.art.hotspots else "Select a control from the list.")
+        self._refresh_controls()
+
+    def apply_mapping(self):
+        if not self._supported(self.selected_control):
+            return
+        try:
+            entry = self.picker.value()
+        except ValueError as error:
+            self.error_label.setText(str(error))
+            self.error_label.show()
+            return
+        self.mapping_changed.emit(self.selected_control, entry)
+
+    def clear_mapping(self):
+        if self._supported(self.selected_control) and self._entry_for(self.selected_control) is not None:
+            self.mapping_changed.emit(self.selected_control, None)
 
     def show_device(self, device, *, multiple_keypads=False):
         self._device = device
@@ -463,6 +408,7 @@ class DeviceDetails(QWidget):
             self.summary.setText("Connect your keypad to customize it")
             self.explanation.setText("A connection to this keypad is not confirmed. Reconnect it, then select it from Devices.")
         else:
-            self.summary.setText("ALL CONTROLS")
-            self.explanation.setText(self._assignment_explanation())
+            self.summary.setText("ALL ACTIONS")
+            self.explanation.setText("")
+            self._refresh_controls()
         self.explanation.setVisible(bool(self.explanation.text()))

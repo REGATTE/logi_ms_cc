@@ -1,6 +1,6 @@
 # Validation
 
-Version: 0.3.0. Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046d:c354`.
+Version 0.3.1. Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046d:c354`.
 
 ## Automated checks
 
@@ -10,7 +10,7 @@ portable app artwork resolution, model bindings, ring-only
 and full imports, editor persistence and drag reordering, popup cancellation,
 keyboard selection and monitor-edge placement. Rust tests cover immutable ring
 actions, single-use/expired tokens, child supervision, XInput mappings and HID++
-notification filtering. Checks pass with 246 Python tests and 56 Rust tests,
+notification filtering. Checks pass with 292 Python tests and 63 Rust tests,
 plus formatting and Clippy. Package smoke includes the ring editor and validates
 that packaged udev rules match the fixed permission helper.
 
@@ -104,6 +104,37 @@ search-to-apply behavior, filtered-control selection and mapping retention.
 Offscreen previews with installed application icons were inspected at 1200×820
 and 970×710. Device information and existing empty choices remain available;
 the UI refactor adds no worker input capture or background process.
+
+Shared action-picker checks cover application, shortcut and system choices on
+keypad launcher keys, individual profile keys, and supported device buttons.
+Mixed actions survive reorder, reload, export/import and missing applications;
+legacy ring bindings remain intact until replaced. GUI tests verify Apply/Remove,
+invalid-input rejection, profile-write rollback, unsupported-control states and
+draft retention during discovery refresh. Rust tests verify exact button identity,
+paused/removed mappings, simultaneous dialpad releases and device-launch context
+across reloads. Expanded shortcut forms and legacy ring assignments were inspected
+at 970×710 in both themes. These checks do not constitute a new physical-button
+confirmation of every newly selectable action.
+
+The desktop ring was subsequently reduced to 232×232, with 44-pixel buttons
+and 28-pixel icons, and opens with a 220 ms bloom from the cursor. All 41
+popup/editor tests pass, covering non-overlapping hitboxes, screen-edge origins,
+transparent frames, early dismissal, keyboard navigation and clicking actions
+during expansion. Hover enlarges options and artwork by 30% around their fixed
+centers, including their clickable area, and returns without geometry drift.
+The separate **+** stays at the bottom with zero, one or seven actions.
+Offscreen previews were inspected in both themes and at 2×
+scaling. A real-time Qt event-loop check confirmed completion, stopped animation
+and released snapshot storage. The settings editor retains its larger preview.
+
+Frameless-window checks cover transparent rounded corners, opaque edge fill,
+native move/resize delegation, minimum-size fallback, maximizing/restoring and
+footer window controls. Closing settings stops its UI timers without contacting
+the worker. Neumorphic light/dark previews cover the device home, console,
+keypad, dialpad, G402, Applications, Action Ring and Settings pages. Known devices
+use bundled official product artwork; verified image coordinates keep dialpad
+controls and the G402 side buttons selectable after scaling and letterboxing.
+Unknown models retain the generic illustration and never inherit a G402 photo.
 
 ## Resource sample
 

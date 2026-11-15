@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from mxcc import gui, paths
 from mxcc.applications import Application
@@ -65,6 +65,35 @@ def custom_profile(profile_id="editor"):
     return {"version": 1, "id": profile_id, "name": "Editor actions", "desktop_ids": ["editor.desktop"], "wm_classes": ["Editor"], "shortcuts": [{"slot": 1, "label": "Save", "keys": "Ctrl+S", "icon": "document-save"}]}
 
 
+def choose_application(window, identifier):
+    window.key_picker.kind_combo.setCurrentIndex(window.key_picker.kind_combo.findData("launch"))
+    window.app_combo.setCurrentIndex(window.app_combo.findData(identifier))
+
+
+def test_frameless_window_footer_controls_preserve_background_worker(isolated_qt, installed_app):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    window.show()
+    QApplication.processEvents()
+    assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
+    window.footer.maximize_button.click()
+    QApplication.processEvents()
+    assert window.isMaximized()
+    assert window.footer.maximize_button.kind == "restore"
+    window.footer.maximize_button.click()
+    QApplication.processEvents()
+    assert not window.isMaximized()
+    assert window.footer.maximize_button.kind == "maximize"
+    window.footer.minimize_button.click()
+    QApplication.processEvents()
+    assert window.isMinimized()
+    window.showNormal()
+    window.timer.start()
+    window.device_timer.start()
+    window.footer.close_button.click()
+    assert not window.isVisible()
+    assert not window.timer.isActive() and not window.device_timer.isActive()
+
+
 def test_profile_strip_tracks_assignments_order_and_selects_hardware_profile(isolated_qt, installed_app, monkeypatch):
     writer = replace(installed_app, id="writer.desktop", name="Writer", wm_class="Writer")
     window = gui.MainWindow(connect_worker=False, applications=[installed_app, writer])
@@ -96,7 +125,7 @@ def test_real_window_apply_launcher_and_original_icon(isolated_qt, installed_app
     window = gui.MainWindow(connect_worker=False, applications=[installed_app])
     window.show()
     window.select_key(6)
-    window.app_combo.setCurrentIndex(window.app_combo.findData(installed_app.id))
+    choose_application(window, installed_app.id)
     QTest.mouseClick(window.apply_button, Qt.MouseButton.LeftButton)
     assert not warnings
     assert window.key_buttons[1].toolTip() == "Editor"
@@ -133,11 +162,80 @@ def test_action_library_search_and_add_preserve_layout_until_apply(isolated_qt, 
     window.launcher_search.setText("No matching action")
     assert not window.launcher_no_results.isHidden()
     window.change_page(1)
-    assert window.launcher_actions.isHidden()
-    assert window.launcher_no_results.isHidden()
-    assert not window.shortcut_preview.isHidden()
-    assert window.shortcut_name.text()
-    assert window.shortcut_keys.text()
+    assert window.key_picker.kind_combo.currentData() == "shortcut"
+    assert window.key_picker.label_edit.text()
+    assert window.key_picker.keys_edit.text()
+    assert set(window.key_picker.category_buttons) == {"launch", "shortcut", "system"}
+
+
+def test_custom_key_actions_survive_reordering_and_reopening(isolated_qt, installed_app):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    window.select_key(1)
+    shortcut = {"label": "Save", "icon": "document-save", "action": {"type": "shortcut", "keys": "Ctrl+S"}}
+    window.key_picker.set_entry(shortcut)
+    window.apply_button.click()
+    assert window.settings["launchers"][1] == shortcut
+    assert window.runtime["pages"][0]["keys"][1]["action"] == shortcut["action"]
+    window.move_launcher(1, 0)
+    assert window.settings["launchers"][0] == shortcut
+    reopened = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    reopened.select_key(0)
+    assert reopened.key_picker.value() == shortcut
+    reopened.clear_key_button.click()
+    assert reopened.settings["launchers"] == ["@screenshot"] + [None] * 8
+
+
+def test_profile_keys_accept_application_system_and_shortcut_actions(isolated_qt, installed_app):
+    _, warnings = isolated_qt
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    window.change_page(1)
+    original = window.profiles["default"]["shortcuts"][:]
+    window.select_key(0)
+    choose_application(window, installed_app.id)
+    window.apply_button.click()
+    saved = load_profiles()["default"]
+    assert saved["shortcuts"][0]["action"] == {"type": "launch", "desktop_id": installed_app.id}
+    assert saved["shortcuts"][1:] == original[1:]
+    assert window.runtime["pages"][1]["keys"][0]["action"]["desktop_id"] == installed_app.id
+    window.key_picker.set_entry({"label": "Screenshot", "icon": "applets-screenshooter", "action": {"type": "screenshot"}})
+    window.apply_button.click()
+    assert window.runtime["pages"][1]["keys"][0]["action"] == {"type": "screenshot"}
+    window.clear_key_button.click()
+    assert window.runtime["pages"][1]["keys"][0] is None
+    assert not warnings
+
+
+def test_profile_action_save_failure_restores_previous_profile(isolated_qt, installed_app, monkeypatch):
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[])
+    window.change_page(1)
+    original = window.profiles["default"]
+    before = paths.settings_path().read_bytes(), paths.runtime_path().read_bytes()
+    monkeypatch.setattr(window, "persist", Mock(side_effect=OSError("Disk unavailable")))
+    window.key_picker.set_entry({"label": "Screenshot", "icon": "applets-screenshooter", "action": {"type": "screenshot"}})
+    window.apply_button.click()
+    assert window.profiles["default"] == original
+    assert not (paths.profiles_dir() / "default.json").exists()
+    assert (paths.settings_path().read_bytes(), paths.runtime_path().read_bytes()) == before
+
+
+def test_device_action_replaces_legacy_ring_binding_and_can_be_removed(isolated_qt, installed_app):
+    from mxcc.device_controls import controls_for_device
+    from mxcc.devices import Device
+    target = {"vendor_id": 0x046d, "product_id": 0xbc00, "control_id": "button:3"}
+    device = Device("dialpad", "MX Dialpad", "dialpad", "Bluetooth", True, False, 0x046d, 0xbc00,
+                    controls=controls_for_device(vendor_id=0x046d, product_id=0xbc00, kind="dialpad"))
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[device])
+    window.settings["action_ring"]["bindings"] = [target]
+    window.persist()
+    window._refresh_device_actions()
+    window.open_device(device.id)
+    shortcut = {"label": "Save", "icon": "document-save", "action": {"type": "shortcut", "keys": "Ctrl+S"}}
+    window.assign_device_action("button:3", shortcut)
+    assert window.settings["action_ring"]["bindings"] == []
+    assert window.settings["device_actions"] == [{**target, **shortcut}]
+    assert window.runtime["device_actions"] == [{**target, "action": shortcut["action"]}]
+    window.assign_device_action("button:3", None)
+    assert window.settings["device_actions"] == window.runtime["device_actions"] == []
 
 
 def test_assigned_applications_follow_keypad_order_and_preserve_shortcuts(isolated_qt, installed_app):
@@ -162,10 +260,9 @@ def test_assigned_applications_follow_keypad_order_and_preserve_shortcuts(isolat
     window.select_key(0)
     window.apply_key()
     assert window.settings["profile_assignments"][installed_app.id] == "editor"
-    window.app_combo.setCurrentIndex(window.app_combo.findData(None))
-    window.apply_key()
+    window.clear_key_button.click()
     assert list(window.application_cards) == [writer.id, "@screenshot"]
-    assert window.stack.widget(0).findChildren(QComboBox) == [window.app_combo]
+    assert set(window.key_picker.category_buttons) == {"launch", "shortcut", "system"}
 
 
 def test_application_cards_route_actions_and_distinguish_search_from_empty_layout(isolated_qt, installed_app, monkeypatch):
@@ -226,7 +323,7 @@ def test_shortcut_import_assigns_profile_and_can_disable_it(isolated_qt, install
     source.write_text(json.dumps(custom_profile()))
     monkeypatch.setattr(gui.QFileDialog, "getOpenFileName", lambda *_: (str(source), ""))
     window = gui.MainWindow(connect_worker=False, applications=[installed_app])
-    window.app_combo.setCurrentIndex(window.app_combo.findData(installed_app.id))
+    choose_application(window, installed_app.id)
     window.apply_key()
     window.import_shortcuts(application=installed_app)
     assert not warnings
@@ -507,8 +604,7 @@ def test_drag_backward_and_to_empty_key_keep_apps_together(isolated_qt, installe
 def test_clearing_app_and_rescanning_close_gaps(isolated_qt, installed_app, monkeypatch):
     window, apps = launcher_window(installed_app)
     window.select_key(1)
-    window.app_combo.setCurrentIndex(window.app_combo.findData(None))
-    window.apply_key()
+    window.clear_key_button.click()
     assert window.settings['launchers'] == ['chatgpt.desktop', 'firefox.desktop', '@screenshot'] + [None] * 6
     monkeypatch.setattr(gui, 'discover_applications', lambda: apps[1:])
     window.rescan()

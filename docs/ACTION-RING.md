@@ -5,6 +5,12 @@ layout, original foreground window, and a single-use session token. The popup
 can select one of up to seven stored actions; it cannot submit arbitrary commands.
 Only app launch/focus, keyboard shortcuts and Screenshot are supported.
 
+The settings pages share the same action picker. Direct keypad and supported
+mouse/dialpad button mappings additionally offer Open Action Ring under System;
+the ring's own picker excludes it to avoid recursive rings. New direct button
+actions use `device_actions` in settings and runtime configuration, while existing
+`action_ring.bindings` retain their original meaning.
+
 ## Configuration
 
 Settings version 1 has an optional `action_ring` field. Old settings migrate to
@@ -12,7 +18,13 @@ a default ring using up to four existing launcher apps plus Copy, Paste and
 Screenshot, without assigning any hardware triggers. Layouts contain zero to
 seven configured actions. Nulls are removed, and unavailable apps are omitted
 from the runtime popup. Visible actions are evenly spaced with a separate **+**
-button. The popup is 280 pixels across, with 50-pixel buttons and 30-pixel icons.
+button fixed at the bottom. The popup is 232 pixels across, with 44-pixel buttons
+and 28-pixel icons. Hovering enlarges an option and its artwork by 30% over
+100 milliseconds; moving away restores its size. Enlarged areas remain clickable.
+It blooms outward from the cursor over 220 milliseconds, slowing smoothly into
+its final position. Near screen edges the expansion settles inside the monitor.
+Actions and cancellation remain available during the animation; keyboard focus
+navigation immediately finishes the bloom. The animation runs only on opening.
 
 The **+** button always opens the matching layout in settings, reusing an open
 window. At seven actions it opens editing controls instead of creating an eighth

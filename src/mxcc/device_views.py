@@ -11,6 +11,9 @@ from PySide6.QtWidgets import (
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
+from .appearance import paint_neumorphic_surface
+from .device_artwork import draw_device_artwork
+
 
 CREATIVE_CONSOLE_ID = "@creative-console"
 
@@ -58,12 +61,8 @@ class IconAction(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.isEnabled() and (self.underMouse() or self.hasFocus() or self.isDown()):
-            color = self.palette().color(QPalette.ColorRole.Accent)
-            fill = QColor(color)
-            fill.setAlpha(55 if self.isDown() else 30)
-            painter.setBrush(fill)
-            painter.setPen(QPen(color, 1.5) if self.hasFocus() else Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 7, 7)
+            paint_neumorphic_surface(painter, self.rect(), self.palette(), radius=9,
+                                     pressed=self.isDown(), focused=self.hasFocus())
         group = QPalette.ColorGroup.Active if self.isEnabled() else QPalette.ColorGroup.Disabled
         color = self.palette().color(group, QPalette.ColorRole.WindowText)
         painter.setPen(QPen(color, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
@@ -80,6 +79,17 @@ class IconAction(QAbstractButton):
             path.lineTo(19, 8)
             path.lineTo(14.5, 8)
             painter.drawPath(path)
+        elif self.kind == "minimize":
+            painter.drawLine(QPointF(6, 17), QPointF(18, 17))
+        elif self.kind == "maximize":
+            painter.drawRoundedRect(QRectF(6, 6, 12, 12), 1, 1)
+        elif self.kind == "restore":
+            painter.drawRoundedRect(QRectF(8, 5, 11, 11), 1, 1)
+            painter.setBrush(self.palette().color(QPalette.ColorRole.Window))
+            painter.drawRoundedRect(QRectF(5, 8, 11, 11), 1, 1)
+        elif self.kind == "close":
+            painter.drawLine(QPointF(7, 7), QPointF(17, 17))
+            painter.drawLine(QPointF(17, 7), QPointF(7, 17))
         else:
             for tooth in range(8):
                 for offset, radius in ((-18, 7.5), (-10, 10), (10, 10), (18, 7.5)):
@@ -100,6 +110,9 @@ class AppFooter(QWidget):
 
     refresh_requested = Signal()
     settings_requested = Signal()
+    minimize_requested = Signal()
+    maximize_requested = Signal()
+    close_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,19 +126,40 @@ class AppFooter(QWidget):
         layout.setContentsMargins(36, 0, 36, 24)
         layout.setSpacing(0)
         actions = QWidget()
-        actions.setFixedWidth(88)
+        actions.setFixedWidth(128)
         action_layout = QHBoxLayout(actions)
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(8)
         action_layout.addWidget(self.refresh_button)
         action_layout.addWidget(self.settings_button)
+        action_layout.addStretch()
         layout.addWidget(actions)
         layout.addStretch()
-        title = _label("MX Creative Control", "appFooterLabel")
+        title = _label("Logitech Options", "appFooterLabel")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         layout.addStretch()
-        layout.addSpacing(88)
+        controls = QWidget()
+        controls.setFixedWidth(128)
+        control_layout = QHBoxLayout(controls)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(4)
+        self.minimize_button = IconAction("minimize", "Minimize window")
+        self.maximize_button = IconAction("maximize", "Maximize window")
+        self.close_button = IconAction("close", "Close settings")
+        for control, signal in ((self.minimize_button, self.minimize_requested),
+                                (self.maximize_button, self.maximize_requested),
+                                (self.close_button, self.close_requested)):
+            control.clicked.connect(signal)
+            control_layout.addWidget(control)
+        layout.addWidget(controls)
+
+    def set_maximized(self, maximized):
+        self.maximize_button.kind = "restore" if maximized else "maximize"
+        title = "Restore window" if maximized else "Maximize window"
+        self.maximize_button.setToolTip(title)
+        self.maximize_button.setAccessibleName(title)
+        self.maximize_button.update()
 
     def set_scanning(self, scanning: bool):
         self.refresh_button.setEnabled(not scanning)
@@ -243,12 +277,15 @@ class ConnectionIndicator(QWidget):
 
 
 class DeviceArt(QWidget):
-    """Hardware silhouettes drawn as vectors, independent of display scale/theme."""
+    """Offline product renders with scalable illustrations for unknown models."""
 
     def __init__(self, kind: str = "device", parent=None):
         super().__init__(parent)
         self.kind = kind
         self.kinds = None
+        self.vendor_id = None
+        self.product_id = None
+        self.controls_view = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(100, 100)
@@ -266,6 +303,11 @@ class DeviceArt(QWidget):
         kinds = tuple(kinds)
         if kinds != self.kinds:
             self.kinds = kinds
+            self.update()
+
+    def set_model(self, vendor_id, product_id):
+        if (vendor_id, product_id) != (self.vendor_id, self.product_id):
+            self.vendor_id, self.product_id = vendor_id, product_id
             self.update()
 
     @staticmethod
@@ -307,6 +349,10 @@ class DeviceArt(QWidget):
         painter.end()
 
     def _draw_device(self, painter, kind):
+        vendor = self.vendor_id if self.kinds is None else None
+        product = self.product_id if self.kinds is None else None
+        if draw_device_artwork(painter, kind, vendor, product, controls=self.controls_view):
+            return
         self._shadow(painter, 130, 178 if kind == "keyboard" else 135)
         if kind == "keypad":
             self._keypad(painter)
@@ -518,15 +564,10 @@ class _DeviceCardBase(QAbstractButton):
             super().keyPressEvent(event)
 
     def paintEvent(self, event):
-        if not (self.underMouse() or self.hasFocus() or self.isDown()):
-            return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = self.palette().color(QPalette.ColorRole.Highlight)
-        fill = QColor(color); fill.setAlpha(45 if self.isDown() else 22)
-        border = QColor(color); border.setAlpha(180 if self.hasFocus() else 65)
-        p.setBrush(fill); p.setPen(QPen(border, 2 if self.hasFocus() else 1))
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 18, 18)
+        paint_neumorphic_surface(p, self.rect(), self.palette(), radius=24,
+                                 pressed=self.isDown(), focused=self.hasFocus() or self.underMouse())
         p.end()
 
 
@@ -538,6 +579,7 @@ class DeviceCard(_DeviceCardBase):
     def update_device(self, device):
         self.device = device
         self.art.set_kind(device.kind)
+        self.art.set_model(device.vendor_id, device.product_id)
         self.name_label.setText(device.name)
         self._set_indicators([device])
         self.support_label.setText("Customize" if device.supported else "Controls" if device.controls else "Device details")

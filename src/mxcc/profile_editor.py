@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHeaderView, QLabel, QLineEdit,
                                QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
@@ -47,8 +48,16 @@ class ProfileEditor(QDialog):
             row = shortcut["slot"] - 1
             for column, field in enumerate(("label", "keys", "icon")):
                 self.table.item(row, column).setText(shortcut.get(field, ""))
+            if "action" in shortcut:
+                action = shortcut["action"]
+                summary = {"launch": "Open application", "screenshot": "Screenshot", "open_ring": "Action Ring", "shortcut": "Keyboard shortcut"}[action["type"]]
+                self.table.item(row, 1).setText(summary)
+                for column in range(3):
+                    item = self.table.item(row, column)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    item.setToolTip("Edit this action by selecting its key on the Keys page.")
         layout.addWidget(self.table)
-        hint = QLabel("Examples: Ctrl+Shift+P, Alt+Left, F12, Print. Leave a row empty to clear it.")
+        hint = QLabel("Examples: Ctrl+Shift+P, Alt+Left, F12, Print. Leave a shortcut row empty to clear it. Application and system actions are edited on the Keys page.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save
@@ -62,7 +71,11 @@ class ProfileEditor(QDialog):
         profile["name"] = self.name.text().strip()
         profile["wm_classes"] = [s.strip() for s in self.classes.text().split(",") if s.strip()]
         profile["shortcuts"] = []
+        action_rows = {entry["slot"]: entry for entry in self.profile["shortcuts"] if "action" in entry}
         for row in range(9):
+            if row + 1 in action_rows:
+                profile["shortcuts"].append(copy.deepcopy(action_rows[row + 1]))
+                continue
             label, keys, icon = [self.table.item(row, c).text().strip() for c in range(3)]
             if not any((label, keys, icon)):
                 continue

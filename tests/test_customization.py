@@ -1,6 +1,7 @@
 """Keep every device editor usable at the supported minimum window size."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mxcc import gui, paths
+from mxcc.applications import Application
 from mxcc.customization import CustomizationWorkspace
 from mxcc.device_controls import controls_for_device
 from mxcc.devices import Device
@@ -46,7 +48,13 @@ def editor_window(monkeypatch, tmp_path):
             battery_percent=81 if kind == "dialpad" else None,
             controls=controls_for_device(vendor_id=0x046d, product_id=product, kind=kind),
         ))
-    window = gui.MainWindow(connect_worker=False, applications=[], devices=inventory)
+    applications = [Application(identifier, title, "applications-internet", "example-app",
+                                title, Path("/apps") / identifier)
+                    for identifier, title in (("chatgpt.desktop", "ChatGPT"),
+                                               ("code.desktop", "Visual Studio Code"),
+                                               ("lark.desktop", "Lark"),
+                                               ("firefox.desktop", "Firefox"))]
+    window = gui.MainWindow(connect_worker=False, applications=applications, devices=inventory)
     window.resize(970, 710)
     window.show()
     _APP.processEvents()
@@ -66,6 +74,7 @@ def test_all_customization_pages_fit_without_clipping_or_writing_settings(editor
     for destination in ("keypad", "dialpad", "mouse", "device", "ring"):
         if destination == "ring":
             window.show_ring()
+            assert len(window.ring_editor.canvas.visible_slots) == 7
         else:
             window.open_device(destination)
         QApplication.processEvents()

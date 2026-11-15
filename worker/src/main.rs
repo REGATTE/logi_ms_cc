@@ -19,7 +19,7 @@ use std::{
     env,
     io::{self, Read},
     os::{fd::AsRawFd, unix::net::UnixStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -176,6 +176,43 @@ fn execute_action(
     }
 }
 
+/// Keypad keys and intercepted device buttons share the same focus-safe dispatch.
+fn trigger_action(
+    action_value: &Action,
+    state: &mut State,
+    launcher: &mut launcher::Launcher,
+    keyboard: &mut Option<Keyboard>,
+    ring: &mut ring::Ring,
+    gui: &Path,
+    sender: &Sender,
+) -> Result<bool, String> {
+    if matches!(action_value, Action::OpenRing {}) {
+        let result = ring.toggle(
+            &state.config.action_ring,
+            gui,
+            sender,
+            &state.status.session,
+            state.status.paused,
+        );
+        state.status.ring_error = result.as_ref().err().cloned();
+        state.status.ring_open = ring.is_open();
+        return result.map(|_| false);
+    }
+    let foreground = ring.dismiss();
+    state.status.ring_open = ring.is_open();
+    let mut redraw = false;
+    if let Some(foreground) = foreground {
+        if matches!(
+            action_value,
+            Action::Shortcut { .. } | Action::Screenshot {}
+        ) {
+            activation::restore_exact(&foreground)?;
+            redraw |= state.focus_changed(foreground, Instant::now());
+        }
+    }
+    execute_action(action_value, state, launcher, keyboard).map(|changed| redraw | changed)
+}
+
 fn refresh_focus(state: &mut State) -> bool {
     match focus::current() {
         Ok(foreground) if !focus::is_ring(&foreground) => {
@@ -213,7 +250,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let buttons = if session == "x11" {
         Some(device_buttons::start(
             sender.clone(),
-            state.config.action_ring.bindings.clone(),
+            state.config.configured_bindings(),
         ))
     } else {
         None
@@ -221,7 +258,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let dialpad = if session == "x11" {
         Some(dialpad_buttons::start(
             sender.clone(),
-            state.config.action_ring.bindings.clone(),
+            state.config.configured_bindings(),
         ))
     } else {
         None
@@ -400,13 +437,13 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                                 state.reload(config);
                                 if let Some(dialpad) = &dialpad {
                                     dialpad.update(
-                                        state.config.action_ring.bindings.clone(),
+                                        state.config.configured_bindings(),
                                         state.status.paused,
                                     );
                                 }
                                 if let Some(buttons) = &buttons {
                                     buttons.update(
-                                        state.config.action_ring.bindings.clone(),
+                                        state.config.configured_bindings(),
                                         state.status.paused,
                                     );
                                 }
@@ -426,10 +463,10 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                                 ring.close();
                             }
                             if let Some(dialpad) = &dialpad {
-                                dialpad.update(state.config.action_ring.bindings.clone(), value);
+                                dialpad.update(state.config.configured_bindings(), value);
                             }
                             if let Some(buttons) = &buttons {
-                                buttons.update(state.config.action_ring.bindings.clone(), value);
+                                buttons.update(state.config.configured_bindings(), value);
                             }
                             Ok(())
                         }
@@ -477,27 +514,31 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         ring.close();
                     }
                     if let Some(dialpad) = &dialpad {
-                        dialpad.update(state.config.action_ring.bindings.clone(), value);
+                        dialpad.update(state.config.configured_bindings(), value);
                     }
                     if let Some(buttons) = &buttons {
-                        buttons.update(state.config.action_ring.bindings.clone(), value);
+                        buttons.update(state.config.configured_bindings(), value);
                     }
                 }
-                Event::OpenRing => {
-                    match ring.toggle(
-                        &state.config.action_ring,
+                Event::DeviceButton(binding) => {
+                    let Some(action_value) = state.device_action(&binding) else {
+                        continue;
+                    };
+                    match trigger_action(
+                        &action_value,
+                        &mut state,
+                        &mut launcher,
+                        &mut keyboard,
+                        &mut ring,
                         &options.gui,
                         &sender,
-                        session,
-                        state.status.paused,
                     ) {
-                        Ok(_) => state.status.ring_error = None,
-                        Err(error) => {
-                            state.status.ring_error = Some(error.clone());
-                            state.status.last_error = Some(error);
+                        Ok(changed) => {
+                            redraw |= changed;
+                            state.status.last_error = None;
                         }
+                        Err(error) => state.status.last_error = Some(error),
                     }
-                    state.status.ring_open = ring.is_open();
                 }
                 Event::RingExited(token, error) => {
                     if ring.exited(&token) {
@@ -523,45 +564,20 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Press::Key(slot) if !state.status.paused => {
                         if let Some(key) = state.page().keys[slot].clone() {
-                            if matches!(key.action, Action::OpenRing {}) {
-                                match ring.toggle(
-                                    &state.config.action_ring,
-                                    &options.gui,
-                                    &sender,
-                                    session,
-                                    state.status.paused,
-                                ) {
-                                    Ok(_) => state.status.ring_error = None,
-                                    Err(error) => {
-                                        state.status.ring_error = Some(error.clone());
-                                        state.status.last_error = Some(error);
-                                    }
+                            match trigger_action(
+                                &key.action,
+                                &mut state,
+                                &mut launcher,
+                                &mut keyboard,
+                                &mut ring,
+                                &options.gui,
+                                &sender,
+                            ) {
+                                Ok(changed) => {
+                                    redraw |= changed;
+                                    state.status.last_error = None;
                                 }
-                            } else {
-                                if let Some(foreground) = ring.dismiss() {
-                                    if matches!(
-                                        key.action,
-                                        Action::Shortcut { .. } | Action::Screenshot {}
-                                    ) {
-                                        if let Err(error) = activation::restore_exact(&foreground) {
-                                            state.status.last_error = Some(error);
-                                            continue;
-                                        }
-                                        redraw |= state.focus_changed(foreground, Instant::now());
-                                    }
-                                }
-                                match execute_action(
-                                    &key.action,
-                                    &mut state,
-                                    &mut launcher,
-                                    &mut keyboard,
-                                ) {
-                                    Ok(changed) => {
-                                        redraw |= changed;
-                                        state.status.last_error = None;
-                                    }
-                                    Err(error) => state.status.last_error = Some(error),
-                                }
+                                Err(error) => state.status.last_error = Some(error),
                             }
                         }
                     }

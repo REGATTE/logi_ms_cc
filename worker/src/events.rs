@@ -1,4 +1,7 @@
-use mx_creative_worker::control::{Foreground, Request};
+use mx_creative_worker::{
+    config::DeviceBinding,
+    control::{Foreground, Request},
+};
 use std::{
     io::Write,
     os::unix::net::UnixStream,
@@ -15,7 +18,7 @@ pub enum Event {
     Tray(bool),
     Page(usize),
     Pause(bool),
-    OpenRing,
+    DeviceButton(DeviceBinding),
     RingExited(String, Option<String>),
     DeviceButtonsStatus(serde_json::Value),
     DialpadButtonsStatus(serde_json::Value),

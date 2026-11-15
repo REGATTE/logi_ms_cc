@@ -19,14 +19,22 @@ required = {
     "./usr/lib/mx-creative-control/setup-permissions",
     "./usr/lib/mx-creative-control/python/mxcc/__main__.py",
     "./usr/lib/mx-creative-control/python/mxcc/appearance.py",
+    "./usr/lib/mx-creative-control/python/mxcc/window_frame.py",
     "./usr/lib/mx-creative-control/python/mxcc/application_views.py",
     "./usr/lib/mx-creative-control/python/mxcc/key_button.py",
     "./usr/lib/mx-creative-control/python/mxcc/devices.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_controls.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_interaction.py",
     "./usr/lib/mx-creative-control/python/mxcc/device_views.py",
+    "./usr/lib/mx-creative-control/python/mxcc/device_artwork.py",
+    "./usr/lib/mx-creative-control/python/mxcc/assets/devices/mx-creative-console.png",
+    "./usr/lib/mx-creative-control/python/mxcc/assets/devices/g402-angle.png",
+    "./usr/lib/mx-creative-control/python/mxcc/assets/devices/g402-side.png",
+    "./usr/lib/mx-creative-control/python/mxcc/assets/devices/SOURCES.md",
     "./usr/lib/mx-creative-control/python/mxcc/device_navigation.py",
     "./usr/lib/mx-creative-control/python/mxcc/customization.py",
+    "./usr/lib/mx-creative-control/python/mxcc/action_picker.py",
+    "./usr/lib/mx-creative-control/python/mxcc/actions.py",
     "./usr/lib/mx-creative-control/python/mxcc/action_ring.py",
     "./usr/lib/mx-creative-control/python/mxcc/ring_editor.py",
     "./usr/lib/mx-creative-control/python/mxcc/ring_configuration.py",
@@ -138,12 +146,19 @@ assert window.views.currentWidget() is window.console
 window.console.cards['test-dialpad'].click()
 assert window.views.currentWidget() is window.details
 assert window.details.title.text() == 'MX Dialpad'
-assert len(window.details.mapping_combos) == 6
-assert all(combo.count() == (2 if identifier.startswith('button:') else 0) and combo.isEnabled()
-           for identifier, combo in window.details.mapping_combos.items())
+assert len(window.details.controls) == 6
+assert set(window.details.picker.category_buttons) == {'launch', 'shortcut', 'system'}
 window.details.art.hotspots['button:1'].click()
 assert window.details.selected_control == 'button:1'
-assert window.details.control_rows['button:1'].property('selected')
+assert window.details.control_selector.currentData() == 'button:1'
+assert window.details.apply_button.isEnabled()
+window.details.picker.set_entry({'label': 'Copy', 'icon': 'edit-copy',
+                                'action': {'type': 'shortcut', 'keys': 'Ctrl+C'}})
+window.details.apply_button.click()
+assert window.settings['device_actions'][0]['control_id'] == 'button:1'
+assert json.loads(runtime_path().read_text())['device_actions'][0]['action'] == {'type': 'shortcut', 'keys': 'Ctrl+C'}
+window.details.select_control('dial:main')
+assert not window.details.apply_button.isEnabled()
 window.details.back_button.click()
 assert window.views.currentWidget() is window.console
 window.console.cards['test-keypad'].click()

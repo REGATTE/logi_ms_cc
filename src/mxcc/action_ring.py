@@ -5,12 +5,16 @@ from __future__ import annotations
 import math
 import sys
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QIcon, QPainter, QPalette, QPen
+from PySide6.QtCore import (
+    QEasingCurve, QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer,
+    QVariantAnimation, Signal,
+)
+from PySide6.QtGui import QCursor, QIcon, QPainter, QPalette, QPen, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from .icons import application_icon, display_icon, setup_icon_theme
 from .key_button import KeyButton
+from .appearance import paint_neumorphic_surface
 
 
 def ring_position(cursor: QPoint, available: QRect, size: QSize) -> QPoint:
@@ -33,27 +37,81 @@ class RingButton(KeyButton):
 
     hovered = Signal(int)
 
-    def __init__(self, slot, parent=None, *, editing=False, add=False):
+    def __init__(self, slot, parent=None, *, editing=False, add=False, hover_zoom=False):
         super().__init__(slot, parent)
         self.editing = editing
+        self.hover_zoom = hover_zoom
+        self._rest_geometry = QRect()
+        self._hover_scale = 1.0
+        self._hover_start = 1.0
+        self._hover_target = 1.0
+        self._hover_animation = None
+        if hover_zoom:
+            self._hover_animation = QVariantAnimation(self)
+            self._hover_animation.setDuration(100)
+            self._hover_animation.setStartValue(0.0)
+            self._hover_animation.setEndValue(1.0)
+            self._hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._hover_animation.valueChanged.connect(self._advance_hover)
         self.filled = False
         self.application_artwork = False
         self.symbolic_artwork = False
         self.add = add
         self.setCheckable(editing)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setIconSize(QSize(30, 30))
+        icon_size = 30 if editing else 28
+        self.setIconSize(QSize(icon_size, icon_size))
         self.set_reorder_enabled(editing)
 
     def enterEvent(self, event):
+        self._animate_hover(True)
         self.hovered.emit(self.slot)
         self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        self._animate_hover(False)
         self.hovered.emit(-1)
         self.update()
         super().leaveEvent(event)
+
+    def set_rest_geometry(self, geometry):
+        self._rest_geometry = QRect(geometry)
+        self._set_hover_scale(self._hover_scale)
+
+    def _set_hover_scale(self, scale):
+        self._hover_scale = scale
+        if not self._rest_geometry.isEmpty():
+            area = QRectF(self._rest_geometry)
+            center = area.center()
+            area.setWidth(area.width() * scale)
+            area.setHeight(area.height() * scale)
+            area.moveCenter(center)
+            # Keep a full pixel envelope around the exact painted scale.
+            self.setGeometry(area.toAlignedRect())
+        self.update()
+
+    def _advance_hover(self, progress):
+        self._set_hover_scale(self._hover_start
+                              + (self._hover_target - self._hover_start) * progress)
+
+    def _animate_hover(self, hovered):
+        if self._hover_animation is None:
+            return
+        self._hover_animation.stop()
+        self._hover_start = self._hover_scale
+        self._hover_target = 1.3 if hovered else 1.0
+        if hovered:
+            self.raise_()
+        if self._hover_start != self._hover_target:
+            self._hover_animation.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self._hover_animation is not None:
+            self._hover_animation.stop()
+            self._hover_start = self._hover_target = 1.0
+            self._set_hover_scale(1.0)
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
@@ -75,16 +133,28 @@ class RingButton(KeyButton):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        rect = self.rect()
+        if self.hover_zoom and not self._rest_geometry.isEmpty():
+            rect = QRect(QPoint(), self._rest_geometry.size())
+            painter.translate((self.width() - rect.width() * self._hover_scale) / 2,
+                              (self.height() - rect.height() * self._hover_scale) / 2)
+            painter.scale(self._hover_scale, self._hover_scale)
         palette = self.palette()
         active = self.isChecked() or self.hasFocus() or self.underMouse() or self.property("dropTarget")
         fill = palette.color(QPalette.ColorRole.Highlight if active else QPalette.ColorRole.Button)
         border = palette.color(QPalette.ColorRole.Accent if active else QPalette.ColorRole.Mid)
         painter.setBrush(fill)
         painter.setPen(QPen(border, 2 if active else 1))
-        corner = min(18, self.width() * .32)
-        painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), corner, corner)
+        corner = min(18, rect.width() * .32)
+        if self.editing or (self.add and not self.hover_zoom):
+            paint_neumorphic_surface(painter, QRectF(rect).adjusted(-3, -3, 3, 3),
+                                     palette, radius=corner, pressed=active, focused=active)
+        else:
+            painter.drawRoundedRect(QRectF(rect).adjusted(2, 2, -2, -2), corner, corner)
         if self.filled:
-            area = self.rect().adjusted(10, 10, -10, -10)
+            inset = 10 if self.editing else 8
+            area = rect.adjusted(inset, inset, -inset, -inset)
             if not self.symbolic_artwork:
                 self.icon().paint(painter, area)
             else:
@@ -100,7 +170,7 @@ class RingButton(KeyButton):
                     painter.drawPixmap(area, artwork)
         elif self.add:
             painter.setPen(QPen(palette.color(QPalette.ColorRole.ButtonText), 2))
-            center = self.rect().center()
+            center = rect.center()
             painter.drawLine(center + QPoint(-6, 0), center + QPoint(6, 0))
             painter.drawLine(center + QPoint(0, -6), center + QPoint(0, 6))
 
@@ -126,12 +196,12 @@ class RingCanvas(QWidget):
         self.setMinimumSize(220, 220)
         self.buttons = []
         for slot in range(7):
-            button = RingButton(slot, self, editing=editing)
+            button = RingButton(slot, self, editing=editing, hover_zoom=not editing)
             button.clicked.connect(lambda checked=False, index=slot: self._select(index))
             button.hovered.connect(self._hover)
             button.moved.connect(self.moved)
             self.buttons.append(button)
-        self.add_button = RingButton(7, self, add=True)
+        self.add_button = RingButton(7, self, add=True, hover_zoom=not editing)
         self.add_button.clicked.connect(self.add_requested)
         self.add_button.hovered.connect(self._hover)
         self.set_slots(slots)
@@ -200,18 +270,20 @@ class RingCanvas(QWidget):
 
     def _orbit(self):
         diameter = min(self.width(), self.height())
-        return min(100 if self.editing else 90, diameter * .32)
+        return min(100 if self.editing else 72, diameter * .32)
 
     def _position_buttons(self):
         diameter = min(self.width(), self.height())
-        size = min(50, round(diameter * .18))
+        size = (min(50, round(diameter * .18)) if self.editing
+                else min(44, round(diameter * .2)))
         radius = self._orbit()
         visible = [self.buttons[index] for index in self.visible_slots] + [self.add_button]
         for index, button in enumerate(visible):
-            angle = -math.pi / 2 + index * 2 * math.pi / len(visible)
+            # The final control is always +, anchored at six o'clock.
+            angle = math.pi / 2 + (index + 1) * 2 * math.pi / len(visible)
             x = round(self.width() / 2 + math.cos(angle) * radius - size / 2)
             y = round(self.height() / 2 + math.sin(angle) * radius - size / 2)
-            button.setGeometry(x, y, size, size)
+            button.set_rest_geometry(QRect(x, y, size, size))
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -226,8 +298,11 @@ class RingCanvas(QWidget):
         painter.drawEllipse(QPoint(center), round(radius), round(radius))
         painter.setBrush(palette.color(QPalette.ColorRole.Window))
         painter.setPen(QPen(border, 1))
-        painter.drawEllipse(center, 21, 21)
-        self.center_icon.paint(painter, QRect(center.x() - 12, center.y() - 12, 24, 24))
+        center_radius = 21 if self.editing else 18
+        icon_radius = 12 if self.editing else 11
+        painter.drawEllipse(center, center_radius, center_radius)
+        self.center_icon.paint(painter, QRect(center.x() - icon_radius, center.y() - icon_radius,
+                                              icon_radius * 2, icon_radius * 2))
         if self.show_labels:
             self._paint_labels(painter)
 
@@ -282,23 +357,80 @@ class RingOverlay(QWidget):
         self.canvas = RingCanvas(context["layout"]["slots"], self, title=name, icon=icon)
         self.canvas.selected.connect(self.choose)
         self.canvas.add_requested.connect(self.configure_ring)
-        self.resize(280, 280)
+        self._bloom_pixmap = None
+        self._bloom_progress = 1.0
+        self._bloom_origin = QPointF()
+        self._bloom_animation = QVariantAnimation(self)
+        self._bloom_animation.setDuration(220)
+        self._bloom_animation.setStartValue(0.0)
+        self._bloom_animation.setEndValue(1.0)
+        self._bloom_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._bloom_animation.valueChanged.connect(self._advance_bloom)
+        self._bloom_animation.finished.connect(self._finish_bloom)
+        self.resize(232, 232)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.canvas.setGeometry(self.rect())
 
     def open_at_cursor(self):
+        if self.finished:
+            return
         cursor = QCursor.pos()
         screen = QApplication.screenAt(cursor) or QApplication.primaryScreen()
         available = screen.availableGeometry()
-        size = min(280, available.width(), available.height())
+        size = min(232, available.width(), available.height())
         self.canvas.setMinimumSize(0, 0)
         self.resize(size, size)
         self.move(ring_position(cursor, available, self.size()))
+        self.canvas.setGeometry(self.rect())
+        self._bloom_origin = QPointF(cursor - self.pos())
+        self._bloom_progress = 0.0
+        # Render once at native resolution; only this small image is scaled
+        # during opening. The editor and native button hitboxes stay unchanged.
+        ratio = self.devicePixelRatioF()
+        self._bloom_pixmap = QPixmap(round(size * ratio), round(size * ratio))
+        self._bloom_pixmap.setDevicePixelRatio(ratio)
+        self._bloom_pixmap.fill(Qt.GlobalColor.transparent)
+        self.canvas.render(self._bloom_pixmap, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        self.canvas.hide()
         self.show()
         self.raise_()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
+        self._bloom_animation.start()
+
+    def _advance_bloom(self, progress):
+        self._bloom_progress = progress
+        self.update()
+
+    def _bloom_rect(self):
+        progress = self._bloom_progress
+        return QRectF(self._bloom_origin.x() * (1 - progress),
+                      self._bloom_origin.y() * (1 - progress),
+                      self.width() * progress, self.height() * progress)
+
+    def _finish_bloom(self):
+        self._bloom_animation.stop()
+        self._bloom_pixmap = None
+        self._bloom_progress = 1.0
+        if not self.finished:
+            self.canvas.show()
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._bloom_pixmap is not None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(self._bloom_rect(), self._bloom_pixmap,
+                               QRectF(self._bloom_pixmap.rect()))
+
+    def event(self, event):
+        # Tab traversal is handled by QWidget before keyPressEvent.
+        if (event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)):
+            self._finish_bloom()
+        return super().event(event)
 
     def _hide_finished(self):
         self.finished = True
@@ -326,6 +458,16 @@ class RingOverlay(QWidget):
             self.cancelled.emit()
 
     def mousePressEvent(self, event):
+        if (self._bloom_pixmap is not None and self._bloom_progress > 0
+                and event.button() == Qt.MouseButton.LeftButton):
+            # Match the currently visible artwork, not its final position.
+            point = (event.position() - self._bloom_rect().topLeft()) / self._bloom_progress
+            buttons = [self.canvas.buttons[index] for index in self.canvas.visible_slots]
+            for button in buttons + [self.canvas.add_button]:
+                if QRectF(button.geometry()).contains(point):
+                    button.click()
+                    event.accept()
+                    return
         # Blank canvas and the center are deliberately safe cancellation areas.
         self.cancel()
         event.accept()
@@ -346,6 +488,7 @@ class RingOverlay(QWidget):
             event.accept()
             return
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self._finish_bloom()
             valid = [self.canvas.buttons[index] for index in self.canvas.visible_slots] + [self.canvas.add_button]
             focused = next((button for button in valid if button.hasFocus()), None)
             step = -1 if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1
@@ -358,8 +501,10 @@ class RingOverlay(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         # Qt dismisses popups on outside clicks without necessarily closing them.
-        if not self.finished:
-            self.finished = True
+        was_finished = self.finished
+        self.finished = True
+        self._finish_bloom()
+        if not was_finished:
             self.cancelled.emit()
 
     def closeEvent(self, event):

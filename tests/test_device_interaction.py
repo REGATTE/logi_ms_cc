@@ -60,12 +60,12 @@ def test_hotspots_follow_artwork_scale_and_letterboxing(art):
     art.set_device(device())
     first = art.hotspots["button:4"]
     center = first.mapTo(art, first.shape.boundingRect().center().toPoint())
-    # Back button source center79,123 maps around artwork center130,120 at1.15x.
-    assert abs(center.x() - 71) <= 1 and abs(center.y() - 123) <= 1
+    # Back button on the official side photo, after the standard 1.15x artwork fit.
+    assert abs(center.x() - 176) <= 1 and abs(center.y() - 103) <= 1
     art.resize(520, 600)
     QApplication.processEvents()
     center = first.mapTo(art, first.shape.boundingRect().center().toPoint())
-    assert abs(center.x() - 143) <= 1 and abs(center.y() - 307) <= 1
+    assert abs(center.x() - 351) <= 1 and abs(center.y() - 266) <= 1
     assert first.hitButton(first.shape.boundingRect().center().toPoint())
     assert not first.hitButton(QPoint(0, 0))
 
@@ -93,8 +93,8 @@ def test_whole_rotary_controls_select_the_same_mapping_from_either_half(art):
     art.set_device(device("dialpad"))
     QApplication.processEvents()
     for identifier, source_x, source_y in (
-        ("wheel:roller", 172, 40), ("wheel:roller", 172, 50),
-        ("dial:main", 105, 116), ("dial:main", 155, 116),
+        ("wheel:roller", 174, 52), ("wheel:roller", 174, 60),
+        ("dial:main", 105, 129), ("dial:main", 155, 129),
     ):
         point = QPoint(round(260 + (source_x - 130) * 2.3),
                        round(240 + (source_y - 120) * 2.3))

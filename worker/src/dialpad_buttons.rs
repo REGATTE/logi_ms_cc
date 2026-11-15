@@ -334,8 +334,14 @@ impl Dialpad {
 
     fn receive(&mut self, sender: &Sender) -> io::Result<()> {
         while let Some(report) = self.read()? {
-            if released(&report, self.feature, &self.assigned, &mut self.held) {
-                sender.send(Event::OpenRing);
+            for control in released(&report, self.feature, &self.assigned, &mut self.held) {
+                if let Some(index) = CONTROL_IDS.iter().position(|cid| *cid == control) {
+                    sender.send(Event::DeviceButton(DeviceBinding {
+                        vendor_id: VENDOR,
+                        product_id: PRODUCT,
+                        control_id: format!("button:{}", index + 1),
+                    }));
+                }
             }
         }
         Ok(())
@@ -363,13 +369,13 @@ impl Dialpad {
                 }
                 // Keep press state while settings replies and input are interleaved.
                 // Input during a configuration change must never invoke an action.
-                released(&report, self.feature, &self.assigned, &mut self.held);
+                let _ = released(&report, self.feature, &self.assigned, &mut self.held);
             } else {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "Wake the MX Dialpad to apply its Action Ring buttons.",
+                        "Wake the MX Dialpad to apply its button actions.",
                     ));
                 }
                 let mut fd = libc::pollfd {
@@ -416,16 +422,16 @@ fn released(
     feature: u8,
     assigned: &BTreeSet<u16>,
     held: &mut BTreeSet<u16>,
-) -> bool {
+) -> Vec<u16> {
     if report.len() < 12 || report[0] != 0x11 || report[1..4] != [0xff, feature, 0] {
-        return false;
+        return Vec::new();
     }
     let next: BTreeSet<_> = report[4..12]
         .chunks_exact(2)
         .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
         .filter(|cid| assigned.contains(cid))
         .collect();
-    let result = held.difference(&next).next().is_some();
+    let result = held.difference(&next).copied().collect();
     *held = next;
     result
 }
@@ -440,15 +446,34 @@ mod tests {
         let mut held = BTreeSet::new();
         let mut report = [0u8; 20];
         report[..6].copy_from_slice(&[0x11, 0xff, 0x0a, 0, 0, 0x53]);
-        assert!(!released(&report, 0x0a, &assigned, &mut held));
-        assert!(!released(&report, 0x0a, &assigned, &mut held));
-        assert!(!released(&[0x02, 0, 0], 0x0a, &assigned, &mut held));
+        assert!(released(&report, 0x0a, &assigned, &mut held).is_empty());
+        assert!(released(&report, 0x0a, &assigned, &mut held).is_empty());
+        assert!(released(&[0x02, 0, 0], 0x0a, &assigned, &mut held).is_empty());
         assert_eq!(held, assigned);
         report[5] = 0x56;
-        assert!(released(&report, 0x0a, &assigned, &mut held));
-        assert!(!released(&report, 0x0a, &assigned, &mut held));
+        assert_eq!(released(&report, 0x0a, &assigned, &mut held), [0x0053]);
+        assert!(released(&report, 0x0a, &assigned, &mut held).is_empty());
         report[5] = 0;
-        assert!(!released(&report, 0x0a, &assigned, &mut held));
+        assert!(released(&report, 0x0a, &assigned, &mut held).is_empty());
+    }
+
+    #[test]
+    fn simultaneous_dialpad_releases_keep_each_button_identity() {
+        let assigned = BTreeSet::from([0x0053, 0x0056, 0x0059]);
+        let mut held = BTreeSet::new();
+        let mut report = [0u8; 20];
+        report[..10].copy_from_slice(&[0x11, 0xff, 0x0a, 0, 0, 0x53, 0, 0x56, 0, 0x59]);
+        assert!(released(&report, 0x0a, &assigned, &mut held).is_empty());
+        report[5] = 0;
+        report[9] = 0;
+        assert_eq!(
+            released(&report, 0x0a, &assigned, &mut held),
+            [0x0053, 0x0059]
+        );
+        assert_eq!(held, BTreeSet::from([0x0056]));
+        report[7] = 0;
+        assert_eq!(released(&report, 0x0a, &assigned, &mut held), [0x0056]);
+        assert!(released(&report, 0x0a, &assigned, &mut held).is_empty());
     }
 
     #[test]

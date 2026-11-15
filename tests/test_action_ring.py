@@ -7,12 +7,12 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtCore import QAbstractAnimation, QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QCursor, QEnterEvent, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from mxcc.action_ring import RingOverlay, _connect_session, foreground_application, ring_position
+from mxcc.action_ring import RingCanvas, RingOverlay, _connect_session, foreground_application, ring_position
 from mxcc.applications import Application
 
 _APP = None
@@ -114,13 +114,18 @@ def test_compact_ring_shows_only_actions_and_one_permanent_plus(overlay, count):
     entry = overlay.canvas.slots[0]
     overlay.canvas.set_slots([entry] * count)
     QApplication.processEvents()
-    assert overlay.size() == QSize(280, 280)
+    assert overlay.size() == QSize(232, 232)
     assert sum(button.isVisible() for button in overlay.canvas.buttons) == count
     assert overlay.canvas.add_button.isVisible() and overlay.canvas.add_button.isEnabled()
+    plus_center = overlay.canvas.add_button.geometry().center()
+    assert abs(plus_center.x() - overlay.canvas.rect().center().x()) <= 1
+    assert plus_center.y() > overlay.canvas.rect().center().y()
     shown = [button for button in overlay.canvas.buttons if button.isVisible()] + [overlay.canvas.add_button]
     for button in shown:
-        assert button.size() == QSize(50, 50)
+        assert button.size() == QSize(44, 44)
         assert overlay.canvas.rect().contains(button.geometry())
+    assert all(not first.geometry().intersects(second.geometry())
+               for index, first in enumerate(shown) for second in shown[index + 1:])
     assert all(not button.isEnabled() for button in overlay.canvas.buttons[count:])
     selected = []
     overlay.selected.connect(selected.append)
@@ -174,3 +179,193 @@ def test_empty_ring_keyboard_navigation_can_reach_plus(overlay):
     assert overlay.canvas.add_button.hasFocus()
     QTest.keyClick(overlay.canvas.add_button, Qt.Key.Key_Return)
     assert configured == [True]
+
+
+@pytest.mark.parametrize("cursor", [QPoint(-1000, 400), QPoint(-4, 870)])
+def test_bloom_starts_at_cursor_and_settles_into_native_controls(overlay, monkeypatch, cursor):
+    monitor = QRect(-1920, -200, 1920, 1080)
+
+    class Screen:
+        def availableGeometry(self):
+            return monitor
+
+    monkeypatch.setattr(QCursor, "pos", staticmethod(lambda: cursor))
+    monkeypatch.setattr(QApplication, "screenAt", staticmethod(lambda point: Screen()))
+    overlay.open_at_cursor()
+    animation = overlay._bloom_animation
+    assert animation.state() == QAbstractAnimation.State.Running
+    assert overlay.canvas.isHidden()
+    assert monitor.contains(overlay.geometry())
+    assert overlay._bloom_origin == QPointF(cursor - overlay.pos())
+    assert overlay._bloom_rect().topLeft() == overlay._bloom_origin
+    assert overlay._bloom_rect().isEmpty()
+    assert overlay._bloom_pixmap.toImage().pixelColor(0, 0).alpha() == 0
+
+    animation.setCurrentTime(animation.duration() // 2)
+    assert 0 < overlay._bloom_progress < 1
+    assert 0 < overlay._bloom_rect().width() < overlay.width()
+    assert QRectF(overlay.rect()).contains(overlay._bloom_rect())
+    animation.setCurrentTime(animation.duration())
+    assert animation.state() == QAbstractAnimation.State.Stopped
+    assert overlay.canvas.isVisible()
+    assert overlay._bloom_pixmap is None
+    assert overlay._bloom_rect() == QRectF(overlay.rect())
+    assert overlay.canvas.buttons[0].size() == QSize(44, 44)
+
+
+@pytest.mark.parametrize("dismiss", ["cancel", "hide"])
+def test_dismissing_mid_bloom_stops_animation_without_reviving_popup(overlay, dismiss):
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    overlay.open_at_cursor()
+    animation = overlay._bloom_animation
+    animation.setCurrentTime(animation.duration() // 2)
+    getattr(overlay, dismiss)()
+    assert animation.state() == QAbstractAnimation.State.Stopped
+    assert overlay._bloom_pixmap is None
+    animation.setCurrentTime(animation.duration())
+    QApplication.processEvents()
+    overlay.cancel()
+    assert not overlay.isVisible() and not overlay.canvas.isVisible()
+    assert cancelled == [True]
+
+
+@pytest.mark.parametrize("key, expected", [(Qt.Key.Key_1, "action"),
+                                          (Qt.Key.Key_Plus, "configure"),
+                                          (Qt.Key.Key_Escape, "cancel")])
+def test_bloom_does_not_delay_keyboard_actions_or_cancellation(overlay, key, expected):
+    events = []
+    overlay.selected.connect(lambda slot: events.append(("action", overlay.isVisible())))
+    overlay.configure_requested.connect(lambda: events.append(("configure", overlay.isVisible())))
+    overlay.cancelled.connect(lambda: events.append(("cancel", overlay.isVisible())))
+    overlay.open_at_cursor()
+    QTest.keyClick(overlay, key)
+    assert events == [(expected, False)]
+    assert overlay._bloom_animation.state() == QAbstractAnimation.State.Stopped
+    assert overlay._bloom_pixmap is None
+
+
+@pytest.mark.parametrize("key", [Qt.Key.Key_Right, Qt.Key.Key_Tab, Qt.Key.Key_Backtab])
+def test_keyboard_navigation_settles_bloom_before_focusing_controls(overlay, key):
+    overlay.open_at_cursor()
+    QTest.keyClick(overlay, key)
+    assert overlay.canvas.isVisible()
+    assert overlay._bloom_animation.state() == QAbstractAnimation.State.Stopped
+    assert overlay._bloom_pixmap is None
+    controls = [overlay.canvas.buttons[0], overlay.canvas.add_button]
+    assert any(button.hasFocus() for button in controls)
+
+
+@pytest.mark.parametrize("target", ["action", "configure", "cancel"])
+def test_pointer_can_use_visible_artwork_during_bloom(overlay, target):
+    events = []
+    overlay.selected.connect(lambda slot: events.append(("action", overlay.isVisible())))
+    overlay.configure_requested.connect(lambda: events.append(("configure", overlay.isVisible())))
+    overlay.cancelled.connect(lambda: events.append(("cancel", overlay.isVisible())))
+    overlay.open_at_cursor()
+    animation = overlay._bloom_animation
+    animation.setCurrentTime(animation.duration() // 3)
+    if target == "action":
+        point = overlay.canvas.buttons[0].geometry().center()
+    elif target == "configure":
+        point = overlay.canvas.add_button.geometry().center()
+    else:
+        point = overlay.canvas.rect().center()
+    displayed = overlay._bloom_rect()
+    position = QPoint(round(displayed.left() + point.x() * displayed.width() / overlay.width()),
+                      round(displayed.top() + point.y() * displayed.height() / overlay.height()))
+    QTest.mouseClick(overlay, Qt.MouseButton.LeftButton, pos=position)
+    assert events == [(target, False)]
+    assert animation.state() == QAbstractAnimation.State.Stopped
+    assert overlay._bloom_pixmap is None
+
+
+def _enter_option(button):
+    point = QPointF(button.rect().center())
+    QApplication.sendEvent(button, QEnterEvent(point, point,
+                                               QPointF(button.mapToGlobal(point.toPoint()))))
+
+
+def test_hover_enlarges_artwork_around_fixed_center_and_returns_without_drift(overlay):
+    entry = overlay.canvas.slots[0]
+    overlay.canvas.set_slots([entry] * 7)
+    button = overlay.canvas.buttons[0]
+    resting = button.geometry()
+    red = QColor("#ed1731")
+    artwork = QPixmap(32, 32)
+    artwork.fill(red)
+    button.setIcon(QIcon(artwork))
+    button.symbolic_artwork = False
+
+    def artwork_width():
+        image = button.grab().toImage()
+        return sum(image.pixelColor(x, image.height() // 2) == red
+                   for x in range(image.width()))
+
+    original_artwork_width = artwork_width()
+    for _ in range(2):
+        _enter_option(button)
+        animation = button._hover_animation
+        animation.setCurrentTime(animation.duration() // 2)
+        assert 1 < button._hover_scale < 1.3
+        animation.setCurrentTime(animation.duration())
+        assert button._hover_scale == pytest.approx(1.3)
+        assert QRectF(button.geometry()).center() == QRectF(resting).center()
+        assert overlay.canvas.rect().contains(button.geometry())
+        assert artwork_width() / original_artwork_width == pytest.approx(1.3, abs=.06)
+        QApplication.sendEvent(button, QEvent(QEvent.Type.Leave))
+        animation.setCurrentTime(animation.duration())
+        assert button.geometry() == resting
+        assert button._hover_scale == 1
+
+
+@pytest.mark.parametrize("target", ["action", "configure"])
+def test_enlarged_option_area_is_clickable(overlay, target):
+    button = overlay.canvas.buttons[0] if target == "action" else overlay.canvas.add_button
+    resting = button.geometry()
+    _enter_option(button)
+    animation = button._hover_animation
+    animation.setCurrentTime(animation.duration())
+    point = button.mapTo(overlay.canvas, QPoint(3, button.height() // 2))
+    assert not resting.contains(point)
+    assert overlay.canvas.childAt(point) is button
+    events = []
+    overlay.selected.connect(lambda slot: events.append("action"))
+    overlay.configure_requested.connect(lambda: events.append("configure"))
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton,
+                     pos=button.mapFrom(overlay.canvas, point))
+    assert events == [target]
+    assert not overlay.isVisible()
+
+
+def test_hiding_popup_stops_and_resets_hover_animation(overlay):
+    button = overlay.canvas.buttons[0]
+    resting = button.geometry()
+    _enter_option(button)
+    animation = button._hover_animation
+    animation.setCurrentTime(animation.duration() // 2)
+    assert button._hover_scale > 1
+    overlay.hide()
+    assert animation.state() == QAbstractAnimation.State.Stopped
+    assert button._hover_scale == 1
+    assert button.geometry() == resting
+    QTest.qWait(animation.duration() + 20)
+    assert button.geometry() == resting and not overlay.isVisible()
+
+
+def test_editor_actions_and_plus_keep_their_size_on_hover(overlay):
+    editor = RingCanvas(overlay.canvas.slots, editing=True)
+    editor.resize(408, 390)
+    editor.show()
+    QApplication.processEvents()
+    try:
+        for button in (editor.buttons[0], editor.add_button):
+            resting = button.geometry()
+            _enter_option(button)
+            assert not button.hover_zoom
+            assert button._hover_animation is None
+            assert button.geometry() == resting
+            QApplication.sendEvent(button, QEvent(QEvent.Type.Leave))
+    finally:
+        editor.close()
+        editor.deleteLater()

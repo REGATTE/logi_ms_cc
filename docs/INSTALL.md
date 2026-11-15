@@ -1,9 +1,9 @@
 # Install on Ubuntu
 
 The initial package targets Ubuntu 24.04 with its system Python 3.12, on the
-architecture used to build it. It controls the USB MX Creative **Keypad**; other
-connected Logitech devices have control-mapping placeholders and connection details.
-Those assignment dropdowns are intentionally empty and do not change input behavior.
+architecture used to build it. It controls the USB MX Creative **Keypad** and
+supports application, shortcut and system mappings on supported mouse/dialpad
+buttons. Wheels and unsupported controls remain unavailable in the picker.
 This is an independent
 community application, not Logitech's Logi Options+ software.
 
@@ -12,7 +12,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.3.0_amd64.deb
+sudo apt install ./mx-creative-control_0.3.1_amd64.deb
 mx-creative-control
 ```
 
@@ -25,6 +25,11 @@ The package includes its pinned Qt runtime. Installation does not run pip or
 download application code; apt may download declared Ubuntu system dependencies.
 For a completely offline PC, those Ubuntu dependencies must already be present.
 An arm64 machine requires an arm64 build.
+
+The rounded settings window has no native title bar. Drag empty header or footer
+space to move it, use its edges to resize, and use the bottom-right icons to
+minimize, maximize/restore or close. Closing settings leaves the worker running.
+Device artwork is bundled for offline use.
 
 Connect the keypad over USB. Open **MX Creative Control** from Ubuntu's app
 launcher and select **MX Creative Console** on the device home screen. Choose
@@ -56,25 +61,25 @@ controls may need a model description. A device without reported controls shows
 an empty state. Reading this metadata requires no additional input permissions.
 
 On the G402 and dialpad pages, click an outlined control in the device image to
-highlight its matching assignment row; the list scrolls to the selected control.
-Clicking or focusing a row highlights the corresponding image control. Each
-wheel or dial is selected as one physical control with a single assignment.
-The future action will interpret direction (for example, increasing/decreasing
-volume or scrubbing forward/backward). Selection does not assign an action or alter device behavior.
-Devices without known physical layouts still support selection in the list.
+select it in the control dropdown. Choosing a control in the dropdown highlights
+it on the image. For supported buttons, choose an application, keyboard shortcut
+or system action, then press **Apply**; **Remove** clears its mapping. Selecting
+a control alone does not change device behavior. Each wheel or dial is shown as
+one physical control; its mapping remains unavailable. Devices without known
+physical layouts still support selection through the dropdown.
 
 The home screen lists connected Logitech USB/HID and Bluetooth devices, grouping
 the keypad and dialpad under **MX Creative Console**. The shared bottom-left
 Refresh icon is available on every page and updates the inventory; it also refreshes while the window is
 open. Open the Console card to see its components side by side and select the
 keypad or dialpad by its image. The dialpad and other devices
-open control assignments and connection details. Supported buttons can open the
-Action Ring; wheels and other actions retain empty choices.
+open control assignments and connection details. Supported buttons can launch
+or focus applications, send shortcuts, take screenshots or open the Action Ring.
 Both selection pages show each device's reported battery percentage beside its
 connection dot beneath the device. No percentage appears when battery data is
 unavailable.
 Discovery does not pair Bluetooth devices. Only explicit button assignments
-enable ring capture; the dialpad uses temporary per-button diversion.
+enable button capture; the dialpad uses temporary per-button diversion.
 Connect just one supported keypad to use the editor; multiple keypads are
 shown individually, but their configuration cannot be targeted independently.
 Back controls return to the console or all devices. The Settings gear at the bottom left of every page opens
@@ -193,7 +198,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.3.0_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.3.1_amd64.deb
 python3 scripts/source-archive.py
 ```
 

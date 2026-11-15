@@ -1,8 +1,8 @@
 //! Per-device XInput2 passive grabs. Only assigned buttons are intercepted.
 //!
 //! A slave-device grab suppresses the original click and automatically ends on
-//! release. The ring opens on release so the pointer is attached again before
-//! the overlay appears. No keyboard events or pointer motion are monitored.
+//! release. Actions run on release so the pointer is attached again before
+//! a popup or shortcut runs. No keyboard events or pointer motion are monitored.
 
 use crate::events::{Event, Sender};
 use mx_creative_worker::config::DeviceBinding;
@@ -91,7 +91,7 @@ fn run(
     wake: &mut UnixStream,
 ) -> Result<(), String> {
     if std::env::var("XDG_SESSION_TYPE").is_ok_and(|value| value == "wayland") {
-        return Err("Device button Action Ring triggers require an X11 session.".into());
+        return Err("Device button actions require an X11 session.".into());
     }
     let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
     xinput::xi_query_version(&conn, 2, 0)
@@ -120,6 +120,7 @@ fn run(
                 Command::Update(next, value) => {
                     bindings = next;
                     paused = value;
+                    held.clear();
                     refresh = true;
                 }
                 Command::Stop => return Ok(()), // Closing the connection releases all grabs.
@@ -141,8 +142,8 @@ fn run(
                 }
                 XEvent::XinputButtonRelease(event) => {
                     let key = (event.deviceid, event.detail);
-                    if held.remove(&key) && grabs.contains_key(&key) && !paused {
-                        sender.send(Event::OpenRing);
+                    if let Some(binding) = released_binding(key, &mut held, &grabs, paused) {
+                        sender.send(Event::DeviceButton(binding));
                     }
                 }
                 XEvent::XinputHierarchy(event) if relevant_hierarchy(event.flags) => refresh = true,
@@ -175,6 +176,19 @@ fn run(
         }
         let mut bytes = [0u8; 256];
         while wake.read(&mut bytes).is_ok_and(|count| count > 0) {}
+    }
+}
+
+fn released_binding(
+    key: (u16, u32),
+    held: &mut BTreeSet<(u16, u32)>,
+    grabs: &BTreeMap<(u16, u32), DeviceBinding>,
+    paused: bool,
+) -> Option<DeviceBinding> {
+    if held.remove(&key) && !paused {
+        grabs.get(&key).cloned()
+    } else {
+        None
     }
 }
 
@@ -433,5 +447,23 @@ mod tests {
         ));
         assert!(relevant_hierarchy(HierarchyMask::SLAVE_REMOVED));
         assert!(relevant_hierarchy(HierarchyMask::DEVICE_ENABLED));
+    }
+
+    #[test]
+    fn releases_keep_device_identity_and_ignore_unheld_removed_or_paused_grabs() {
+        let side = binding(0xc07e, "button:4");
+        let forward = binding(0xc001, "key:277");
+        let mut grabs = BTreeMap::from([((10, 8), side.clone()), ((11, 8), forward.clone())]);
+        let mut held = BTreeSet::from([(10, 8), (11, 8)]);
+        assert_eq!(
+            released_binding((11, 8), &mut held, &grabs, false),
+            Some(forward)
+        );
+        assert_eq!(released_binding((11, 8), &mut held, &grabs, false), None);
+        assert_eq!(released_binding((10, 8), &mut held, &grabs, true), None);
+        held.insert((10, 8));
+        grabs.remove(&(10, 8));
+        assert_eq!(released_binding((10, 8), &mut held, &grabs, false), None);
+        assert!(held.is_empty());
     }
 }

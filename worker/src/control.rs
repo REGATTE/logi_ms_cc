@@ -1,4 +1,4 @@
-use crate::config::{Action, Config, Page};
+use crate::config::{Action, Config, DeviceBinding, Page};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -106,6 +106,7 @@ impl State {
                     "launcher_activation_v1".into(),
                     "actions_ring_v1".into(),
                     "actions_ring_v2".into(),
+                    "device_actions_v1".into(),
                 ],
                 pid: std::process::id(),
                 connected: false,
@@ -280,8 +281,8 @@ impl State {
         if self.launch_context.as_ref().is_some_and(|context| {
             !self.config.auto_switch
                 || !self.profile_exists(&context.profile_id)
-                || !self.config.pages[0].keys.iter().flatten().any(|key| {
-                    matches!(&key.action, Action::Launch { desktop_id, profile_id, .. }
+                || !self.config.actions().any(|action| {
+                    matches!(action, Action::Launch { desktop_id, profile_id, .. }
                         if desktop_id == &context.desktop_id
                             && profile_id.as_deref() == Some(context.profile_id.as_str()))
                 })
@@ -295,6 +296,14 @@ impl State {
             .is_some_and(|id| id != "default" && !self.config.profiles.iter().any(|p| &p.id == id))
         {
             self.status.manual_profile = None;
+        }
+    }
+
+    pub fn device_action(&self, binding: &DeviceBinding) -> Option<Action> {
+        if self.status.paused {
+            None
+        } else {
+            self.config.device_action(binding)
         }
     }
 }

@@ -10,6 +10,8 @@ pub struct Config {
     pub profiles: Vec<Profile>,
     #[serde(default)]
     pub action_ring: ActionRing,
+    #[serde(default)]
+    pub device_actions: Vec<DeviceAction>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -107,25 +109,73 @@ impl Config {
             }
             p.page.validate()?;
         }
-        for page in self
-            .pages
-            .iter()
-            .chain(self.profiles.iter().map(|profile| &profile.page))
-        {
-            for key in page.keys.iter().flatten() {
-                if let Action::Launch {
-                    profile_id: Some(id),
-                    ..
-                } = &key.action
-                {
-                    if id != "default" && !ids.contains(id) {
-                        return Err(format!("unknown launcher profile: {id}"));
-                    }
+        for action in self.actions() {
+            if let Action::Launch {
+                profile_id: Some(id),
+                ..
+            } = action
+            {
+                if id != "default" && !ids.contains(id) {
+                    return Err(format!("unknown launcher profile: {id}"));
                 }
             }
         }
         self.action_ring.validate()?;
+        if self.action_ring.bindings.len() + self.device_actions.len() > 256 {
+            return Err("at most 256 device button assignments are supported".into());
+        }
+        let mut bindings: HashSet<_> = self.action_ring.bindings.iter().cloned().collect();
+        for mapping in &self.device_actions {
+            let binding = mapping.binding();
+            if !binding.supported() || !bindings.insert(binding) {
+                return Err("unsupported or duplicate Logitech device button assignment".into());
+            }
+            if matches!(mapping.action, Action::None {}) {
+                return Err(
+                    "remove an assignment instead of assigning an empty device action".into(),
+                );
+            }
+            mapping.action.validate()?;
+        }
         Ok(())
+    }
+
+    /// The current set of controls intercepted by either input backend.
+    pub fn configured_bindings(&self) -> Vec<DeviceBinding> {
+        self.action_ring
+            .bindings
+            .iter()
+            .cloned()
+            .chain(self.device_actions.iter().map(DeviceAction::binding))
+            .collect()
+    }
+
+    /// Resolve identity at dispatch time, so queued events cannot use removed mappings.
+    pub fn device_action(&self, binding: &DeviceBinding) -> Option<Action> {
+        self.device_actions
+            .iter()
+            .find(|mapping| mapping.binding() == *binding)
+            .map(|mapping| mapping.action.clone())
+            .or_else(|| {
+                self.action_ring
+                    .bindings
+                    .contains(binding)
+                    .then_some(Action::OpenRing {})
+            })
+    }
+
+    pub fn actions(&self) -> impl Iterator<Item = &Action> {
+        self.pages
+            .iter()
+            .chain(self.profiles.iter().map(|profile| &profile.page))
+            .flat_map(|page| page.keys.iter().flatten().map(|key| &key.action))
+            .chain(self.device_actions.iter().map(|mapping| &mapping.action))
+            .chain(
+                self.action_ring
+                    .layouts
+                    .iter()
+                    .flat_map(|layout| layout.slots.iter().flatten().map(|slot| &slot.action)),
+            )
     }
 }
 
@@ -220,6 +270,45 @@ pub struct DeviceBinding {
     pub vendor_id: u16,
     pub product_id: u16,
     pub control_id: String,
+}
+
+impl DeviceBinding {
+    /// Only identities already understood by the XInput or HID++ backend.
+    pub fn supported(&self) -> bool {
+        if self.vendor_id != 0x046d || self.product_id == 0 {
+            return false;
+        }
+        match self.product_id {
+            0xc07e => matches!(self.control_id.as_str(), "button:4" | "button:5"),
+            0xbc00 => matches!(
+                self.control_id.as_str(),
+                "button:1" | "button:2" | "button:3" | "button:4"
+            ),
+            _ => matches!(
+                self.control_id.as_str(),
+                "key:272" | "key:273" | "key:274" | "key:275" | "key:276" | "key:277" | "key:278"
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceAction {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub control_id: String,
+    pub action: Action,
+}
+
+impl DeviceAction {
+    pub fn binding(&self) -> DeviceBinding {
+        DeviceBinding {
+            vendor_id: self.vendor_id,
+            product_id: self.product_id,
+            control_id: self.control_id.clone(),
+        }
+    }
 }
 
 impl ActionRing {

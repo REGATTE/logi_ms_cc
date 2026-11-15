@@ -2,7 +2,7 @@
 
 The app discovers installed desktop entries and uses their original icons. A
 launcher tile opens that installed app. A shortcut profile is a separate JSON
-description of up to nine key combinations for that app; it never contains a
+description of up to nine actions for that app; it never contains a
 script or shell command.
 
 Bundled profiles live in the repository's `shortcuts/config/` folder. Installation
@@ -60,6 +60,20 @@ or executable. App launcher tiles always resolve their image from the installed
 app's desktop entry. Missing theme icons use a neutral fallback.
 
 ## Supported keys
+
+The Keys page uses the same Application, Keyboard shortcut and System picker
+for individual profile keys. Existing keyboard entries keep the `keys` form
+shown above. Application and system entries use `action` instead of `keys`:
+
+```json
+{"slot": 4, "label": "Firefox", "icon": "firefox", "action": {"type": "launch", "desktop_id": "firefox.desktop"}}
+```
+
+Other supported action types are `screenshot`, `open_ring`, and `shortcut`
+(with `keys`). An entry must use either the legacy `keys` field or an `action`
+object, never both. The bulk shortcut dialog preserves non-keyboard entries;
+edit those through the selected key's action picker. Application artwork is
+resolved from the installed application on each computer.
 
 Each shortcut is one key plus optional modifiers separated by `+`:
 

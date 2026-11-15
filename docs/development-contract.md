@@ -26,10 +26,14 @@ until Apply. Its plus button selects the next empty key, or keeps the selected
 key and explains replacement when full. The dialpad and other devices show
 searchable controls and expandable connection facts in the same workspace.
 Their assignments apply to all applications; per-app ring actions remain in
-the ring editor. Search does not change bindings, and choosing a device hotspot
-reveals a filtered-out row. Empty-control and disconnected-device states use
+the ring editor. A compact control selector and device hotspots select the same
+input. Empty-control and disconnected-device states use
 the same surface without inventing available actions.
-Supported buttons offer Open Action Ring; other controls retain empty choices.
+`ActionPicker` supplies Open application, Keyboard shortcut and System categories
+to every mapping page. System offers Screenshot and Open Action Ring; the ring
+editor omits recursive ring actions. Drafts and search do not save. Apply and
+Remove update supported mappings; unsupported controls show disabled choices
+with an availability explanation.
 Multiple connected supported keypads block ambiguous configuration rather
 than implying independent routing that the worker does not support.
 
@@ -71,8 +75,8 @@ override overly broad advertisements. The MX Dialpad uses its documented layout;
 G402 exposes only Back and Forward, retaining IDs `button:4` and `button:5`.
 Unknown models use Linux-reported controls and an honest availability note; no controls
 are invented if metadata is absent. IDs describe UI slots, not firmware codes.
-Supported button selectors persist model-scoped ring assignments. Other control
-selectors remain empty. Battery-only refreshes retain widgets and keyboard focus.
+Supported button selectors persist model-scoped action assignments. Battery-only
+refreshes retain selected controls, unapplied drafts and keyboard focus.
 The existing functional keypad editor remains separate from these controls.
 
 The home includes an Action Ring card. Its editor provides up to seven configured actions plus a separate add button,
@@ -86,10 +90,21 @@ grab; cancellation never replays the dismissal click into another application.
 `device_interaction.py` overlays shaped, keyboard-accessible controls on verified
 G402 and dialpad drawings. Hit regions use the same scale and letterboxing as
 the artwork, with exact masks to avoid neighboring controls intercepting clicks.
-Image clicks and row/combo focus synchronize one selected control and scroll
-its row into view. Metadata-only updates preserve selection and focus; changing
+Image clicks and the control selector synchronize one selected control.
+Metadata-only updates preserve selection and focus; changing
 devices or losing the selected capability clears selection. Unknown layouts
 remain selectable in the list and never receive guessed physical hotspots.
+
+Portable settings may contain `device_actions`, a list of target identifiers
+(`vendor_id`, `product_id`, `control_id`) plus `label`, `icon` and `action`.
+Actions use the shared declarative schema; no arbitrary command strings are
+accepted. Compilation resolves installed applications and emits target identifiers
+plus the runtime action. Legacy `action_ring.bindings` continue to open the ring;
+duplicate targets across the two lists are rejected, with at most 256 combined.
+Captured button events carry exact identity and resolve against current settings
+at dispatch, ignoring paused or removed mappings. All direct actions use the same
+focus and execution path as keypad keys. `device_actions_v1` is the compatibility
+capability required by the new editor.
 
 Opening or reactivating settings ensures the worker is running, reloads the
 compiled runtime and selects Apps page 0. The worker is supervised by the
@@ -209,7 +224,7 @@ then retained missing IDs, then nulls; it does not modify the input list.
 `render_face(label, icon_name, app_or_none)` callback returns JPEG filename;
 frontend provides Qt icon rendering, compiler does not import Qt.
 Settings: `version:1`, `launchers` nine entries (desktop ID, `"@screenshot"`, `"@action-ring"`,
-or null), `profile_assignments` map desktop ID to profile ID, `auto_switch`
+portable action entry, or null), `profile_assignments` map desktop ID to profile ID, `auto_switch`
 boolean, `start_at_login` boolean, `show_labels` boolean.
 The optional `theme` setting is `system` (default), `light`, or `dark`; legacy
 version-1 settings without it normalize to `system`. Appearance belongs to the

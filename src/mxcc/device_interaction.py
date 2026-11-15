@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QRegion, QTransf
 from PySide6.QtWidgets import QAbstractButton
 
 from .device_views import DeviceArt
+from .device_artwork import device_artwork_control_regions
 
 
 def _rounded(x, y, width, height, radius=4):
@@ -21,6 +22,9 @@ def _circle(x, y, radius):
 
 def _regions(vendor_id, product_id):
     """Coordinates match DeviceArt's unscaled 260×240 single-device drawing."""
+    artwork_regions = device_artwork_control_regions(vendor_id, product_id)
+    if artwork_regions:
+        return artwork_regions
     if vendor_id != 0x046d:
         return {}
     if product_id == 0xc07e:
@@ -106,6 +110,7 @@ class InteractiveDeviceArt(DeviceArt):
 
     def __init__(self, kind="device", parent=None):
         super().__init__(kind, parent)
+        self.controls_view = True
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.hotspots = {}
         self.selected_control = None
@@ -116,6 +121,7 @@ class InteractiveDeviceArt(DeviceArt):
         controls = tuple(device.controls if controls is None else controls)
         key = (device.id, device.vendor_id, device.product_id, device.kind, controls)
         self.set_kind(device.kind)
+        self.set_model(device.vendor_id, device.product_id)
         if key == self._device_key:
             return
         previous_id = self._device_key[0] if self._device_key else None
