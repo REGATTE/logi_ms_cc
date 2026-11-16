@@ -278,6 +278,9 @@ impl DeviceBinding {
         if self.vendor_id != 0x046d || self.product_id == 0 {
             return false;
         }
+        if self.product_id == 0xb042 && self.control_id == "hidpp:416" {
+            return true;
+        }
         match self.product_id {
             0xc07e => matches!(self.control_id.as_str(), "button:4" | "button:5"),
             0xbc00 => matches!(

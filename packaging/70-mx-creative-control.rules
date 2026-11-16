@@ -2,5 +2,7 @@
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c354", TAG+="uaccess"
 # Bluetooth MX Dialpad: assigned button diversion; wheels remain unchanged.
 SUBSYSTEM=="hidraw", KERNELS=="0005:046D:BC00.*", TAG+="uaccess"
+# Bluetooth MX Master 4: assigned haptic-panel button diversion.
+SUBSYSTEM=="hidraw", KERNELS=="0005:046D:B042.*", TAG+="uaccess"
 # Needed to emit configured shortcut keys; does not read existing keyboards.
 SUBSYSTEM=="misc", KERNEL=="uinput", OPTIONS+="static_node=uinput", TAG+="uaccess"

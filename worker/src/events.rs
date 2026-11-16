@@ -22,6 +22,7 @@ pub enum Event {
     RingExited(String, Option<String>),
     DeviceButtonsStatus(serde_json::Value),
     DialpadButtonsStatus(serde_json::Value),
+    Master4ButtonsStatus(serde_json::Value),
     Shutdown,
 }
 #[derive(Clone)]

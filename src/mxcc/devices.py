@@ -38,6 +38,8 @@ class Device:
     detail: str = ""
     controls: tuple[DeviceControl, ...] = ()
     controls_note: str = ""
+    # Hardware-reported identity, kept separate from editable Bluetooth aliases.
+    model_name: str = ""
 
 
 def _read(path: Path) -> str:
@@ -92,10 +94,14 @@ def _kind(name: str, product: int) -> str:
 
 
 def _device(identifier: str, name: str, product: int, connection: str,
-            *, connected: bool | None = True, battery: int | None = None, detail: str = "") -> Device:
+            *, connected: bool | None = True, battery: int | None = None, detail: str = "",
+            model_name: str | None = None) -> Device:
+    model_name = name if model_name is None else model_name
+    model_name = _name(model_name, product) if model_name.strip() else ""
     name = _name(name, product)
-    device = Device(identifier, name, _kind(name, product), connection, connected,
-                    product == KEYPAD_PRODUCT, LOGITECH_VENDOR, product, battery, detail)
+    device = Device(identifier, name, _kind(model_name or name, product), connection, connected,
+                    product == KEYPAD_PRODUCT, LOGITECH_VENDOR, product, battery, detail,
+                    model_name=model_name)
     return _with_controls(device)
 
 
@@ -150,14 +156,17 @@ def _bluez_devices(objects: Mapping) -> tuple[dict[str, Device], set[str]]:
         if not match or int(match[1], 16) != LOGITECH_VENDOR:
             continue
         product = int(match[2], 16)
-        name = _property(properties.get("Name")) or _property(properties.get("Alias"))
-        if not isinstance(name, str):
-            name = ""
+        model_name = _property(properties.get("Name"))
+        if not isinstance(model_name, str):
+            model_name = ""
+        alias = _property(properties.get("Alias"))
+        name = alias if isinstance(alias, str) and alias.strip() else model_name
         battery_properties = interfaces.get("org.bluez.Battery1", {})
         battery = _property(battery_properties.get("Percentage")) if isinstance(battery_properties, dict) else None
         if type(battery) is not int or not 0 <= battery <= 100:
             battery = None
-        devices[address] = _device(f"bluetooth:{address}", name, product, "Bluetooth", battery=battery)
+        devices[address] = _device(f"bluetooth:{address}", name, product, "Bluetooth",
+                                   battery=battery, model_name=model_name)
     return devices, connected
 
 
@@ -220,6 +229,17 @@ def _read_bluez() -> Mapping | None:
             continue
         if properties["Connected"] is True and isinstance(properties["Modalias"], str) and properties["Modalias"].lower().startswith("usb:v046d"):
             try:
+                # Name is hardware-reported; Alias may contain a user's private
+                # nickname and must not become an external model-image query.
+                output = run(["busctl", "--system", "--timeout=1", "--json=short", "get-property",
+                              "org.bluez", path, "org.bluez.Device1", "Name"])
+                if output:
+                    name = json.loads(output)["data"]
+                    if isinstance(name, str):
+                        properties["Name"] = name
+            except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+                pass  # Live HID metadata can supply a missing hardware name.
+            try:
                 output = run(["busctl", "--system", "--timeout=1", "--json=short", "get-property",
                               "org.bluez", path, "org.bluez.Battery1", "Percentage"])
                 if output:
@@ -271,11 +291,19 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
             identifier = f"bluetooth:{unique}"
             # Composite Bluetooth devices expose several HID interfaces with
             # one address. Keep the richer BlueZ record for every interface.
-            devices.setdefault(identifier, bluetooth.get(unique) or _device(identifier, name, product, "Bluetooth"))
+            device = devices.get(identifier) or bluetooth.get(unique) or _device(identifier, name, product, "Bluetooth")
+            if not device.model_name and name.strip():
+                model_name = _name(name, product)
+                device = replace(device, model_name=model_name, kind=_kind(model_name, product))
+            devices[identifier] = device
             inputs.setdefault(identifier, set()).update(_input_paths(path))
             continue
         parent = next((usb_nodes[ancestor] for ancestor in path.resolve().parents if ancestor in usb_nodes), None)
         if parent is not None and parent.kind != "receiver":
+            device = devices[parent.id]
+            if not device.model_name and name.strip():
+                model_name = _name(name, product)
+                devices[parent.id] = replace(device, model_name=model_name, kind=_kind(model_name, product))
             inputs.setdefault(parent.id, set()).update(_input_paths(path))
             continue  # Composite USB HID interfaces belong to one physical card.
         if parent is not None and (product == parent.product_id or "receiver" in name.casefold()):
@@ -288,13 +316,14 @@ def discover_devices(*, usb_root: Path = Path("/sys/bus/usb/devices"),
                                      connected=None if parent is not None else True,
                                      detail="Wireless connection state is not reported by the receiver." if parent is not None else "")
         inputs.setdefault(identifier, set()).update(_input_paths(path))
-    devices.update({device.id: device for device in bluetooth.values()})
+    for device in bluetooth.values():
+        devices.setdefault(device.id, device)
     # USB battery reporting, where available, is attached to physical devices.
     for path, device in usb_nodes.items():
         for supply in _entries(path / "power_supply"):
             capacity = _read(supply / "capacity")
             if capacity.isdigit() and 0 <= int(capacity) <= 100:
-                devices[device.id] = replace(device, battery_percent=int(capacity))
+                devices[device.id] = replace(devices[device.id], battery_percent=int(capacity))
                 break
     return sorted((_with_controls(device, sorted(inputs.get(device.id, ()))) for device in devices.values()),
                   key=lambda device: (device.kind != "keypad", device.name.casefold(), device.id))

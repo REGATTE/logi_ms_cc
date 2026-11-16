@@ -10,6 +10,9 @@ References:
 https://www.kernel.org/doc/html/latest/input/event-codes.html
 https://www.logitech.com/assets/51742/2/g402-hyperion-fury.pdf
 https://www.logitech.com/assets/70190/mx_creative_console_-_web_qsg_ww.pdf
+https://support.logi.com/hc/en-us/articles/28321445268247-Getting-Started-MX-Master-4
+https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/special_keys.py
+https://github.com/torvalds/linux/blob/master/drivers/hid/hid-input.c
 """
 
 from __future__ import annotations
@@ -45,6 +48,21 @@ MODEL_CONTROLS = {
     (0x046d, 0xc07e): (
         DeviceControl("button:4", "Back button", "button", "model"),
         DeviceControl("button:5", "Forward button", "button", "model")),
+    # Logitech's Back/Forward defaults are HID buttons 4/5, which Linux maps
+    # to BTN_SIDE/BTN_EXTRA (275/276). The connected B042 Bluetooth mouse also
+    # reports its physical Gesture button as key:278 (XInput button 11). Mode
+    # shift and the haptic panel have no verified ordinary mouse event mapping.
+    (0x046d, 0xb042): (
+        DeviceControl("key:272", "Left button", "button", "model"),
+        DeviceControl("key:273", "Right button", "button", "model"),
+        DeviceControl("key:274", "Wheel click", "button", "model"),
+        DeviceControl("key:275", "Back button", "button", "model"),
+        DeviceControl("key:276", "Forward button", "button", "model"),
+        DeviceControl("key:278", "Gesture button", "button", "model"),
+        DeviceControl("hidpp:196", "Wheel mode button", "button", "model"),
+        DeviceControl("hidpp:416", "Haptic Sense Panel", "button", "model"),
+        DeviceControl("rel:8", "Scroll wheel", "wheel", "model"),
+        DeviceControl("rel:6", "Thumb wheel", "wheel", "model")),
 }
 
 
@@ -119,7 +137,7 @@ def controls_for_device(*, vendor_id: int, product_id: int, kind: str,
     ``word_bits`` is injectable for 32-bit and 64-bit sysfs fixtures.
     """
     known = MODEL_CONTROLS.get((vendor_id, product_id))
-    if known is not None:
+    if known is not None and (vendor_id, product_id) != (0x046d, 0xb042):
         return known
     if (vendor_id, product_id) == (0x046d, 0xc354):
         return ()  # Existing keypad editor owns its controls and mappings.
@@ -130,6 +148,13 @@ def controls_for_device(*, vendor_id: int, product_id: int, kind: str,
     for directory in dict.fromkeys(map(Path, input_paths)):
         keys.update(_bitmap(_read(directory / "capabilities/key"), limit=0x300, word_bits=word_bits))
         axes.update(_bitmap(_read(directory / "capabilities/rel"), limit=0x10, word_bits=word_bits))
+    if known is not None:
+        # Keep existing generic mappings addressable without claiming that the
+        # descriptor's unused/extra button usages are named physical controls.
+        additional = tuple(DeviceControl(f"key:{code}", f"Additional reported button {code - 271}",
+                                         "button", "linux")
+                           for code in (277,) if code in keys)
+        return known + additional
     controls = []
     for code in sorted(keys - {0}):
         if _is_button(code):

@@ -80,6 +80,19 @@ def test_device_assignments_export_with_portable_artwork_and_compile_local_ident
     assert app.icon not in source.read_text()
 
 
+def test_master4_haptic_ring_assignment_survives_export_and_runtime_compilation(tmp_path):
+    panel = target(product_id=0xb042, control_id="hidpp:416")
+    assignment = panel | entry("open_ring")
+    settings = default_settings([])
+    settings["device_actions"] = [assignment]
+    source = tmp_path / "haptic.json"
+    export_bundle(source, settings, {})
+    restored, profiles = read_bundle(source)
+    assert restored["device_actions"] == [assignment]
+    runtime = compile_runtime(restored, [], profiles, lambda *_: "face.jpg")
+    assert runtime["device_actions"] == [panel | {"action": {"type": "open_ring"}}]
+
+
 @pytest.mark.parametrize("value", [
     entry("command", command="arbitrary command"),
     entry("launch", desktop_id="../unsafe.desktop"),
@@ -95,6 +108,10 @@ def test_unsupported_actions_and_executable_fields_are_rejected(value):
     {"vendor_id": True}, {"control_id": "dial:main"},
     {"product_id": 0xc07e, "control_id": "button:1"},
     {"product_id": 0x1234, "control_id": "key:279"},
+    {"product_id": 0xb042, "control_id": "hidpp:196"},
+    {"product_id": 0xb042, "control_id": "hidpp:0416"},
+    {"product_id": 0xc07e, "control_id": "hidpp:416"},
+    {"vendor_id": 0x1234, "product_id": 0xb042, "control_id": "hidpp:416"},
 ])
 def test_unmapped_or_invalid_device_targets_are_rejected(changes):
     with pytest.raises(ValueError):

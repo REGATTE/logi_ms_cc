@@ -259,6 +259,16 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         Some(dialpad_buttons::start(
             sender.clone(),
             state.config.configured_bindings(),
+            dialpad_buttons::Target::Dialpad,
+        ))
+    } else {
+        None
+    };
+    let master4 = if session == "x11" {
+        Some(dialpad_buttons::start(
+            sender.clone(),
+            state.config.configured_bindings(),
+            dialpad_buttons::Target::Master4,
         ))
     } else {
         None
@@ -435,6 +445,12 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                             Ok(config) => {
                                 ring.close();
                                 state.reload(config);
+                                if let Some(master4) = &master4 {
+                                    master4.update(
+                                        state.config.configured_bindings(),
+                                        state.status.paused,
+                                    );
+                                }
                                 if let Some(dialpad) = &dialpad {
                                     dialpad.update(
                                         state.config.configured_bindings(),
@@ -461,6 +477,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                             state.status.paused = value;
                             if value {
                                 ring.close();
+                            }
+                            if let Some(master4) = &master4 {
+                                master4.update(state.config.configured_bindings(), value);
                             }
                             if let Some(dialpad) = &dialpad {
                                 dialpad.update(state.config.configured_bindings(), value);
@@ -513,6 +532,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     if value {
                         ring.close();
                     }
+                    if let Some(master4) = &master4 {
+                        master4.update(state.config.configured_bindings(), value);
+                    }
                     if let Some(dialpad) = &dialpad {
                         dialpad.update(state.config.configured_bindings(), value);
                     }
@@ -549,6 +571,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::DeviceButtonsStatus(status) => state.status.device_buttons = status,
                 Event::DialpadButtonsStatus(status) => state.status.dialpad_buttons = status,
+                Event::Master4ButtonsStatus(status) => state.status.mx_master4_buttons = status,
                 Event::Shutdown => quit = true,
             }
         }
@@ -679,6 +702,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     ring.close();
     drop(buttons);
     drop(dialpad);
+    drop(master4);
     if let Some(k) = keypad.as_mut() {
         k.restore();
     }

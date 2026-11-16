@@ -524,6 +524,34 @@ def connected_status():
             "focus_supported": True, "tray_available": True, "active_app": "Editor", "paused": False}
 
 
+def test_master4_haptic_uses_its_own_backend_status(isolated_qt, installed_app, monkeypatch):
+    from mxcc.device_controls import controls_for_device
+    from mxcc.devices import Device
+    device = Device("master4", "MX Master 4", "mouse", "Bluetooth", True, False, 0x046d, 0xb042,
+                    controls=controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse"))
+    window = gui.MainWindow(connect_worker=False, applications=[installed_app], devices=[device])
+    window.open_device(device.id)
+    status = connected_status() | {
+        "device_buttons": {"errors": ["Standard button capture unavailable"]},
+        "mx_master4_buttons": {"errors": ["Haptic panel access required"], "permission_required": True},
+    }
+    monkeypatch.setattr(gui.ipc, "request", Mock(return_value=status))
+    window.details.select_control("hidpp:416")
+    window.refresh_status()
+    assert window.details._backend_error == "Haptic panel access required"
+    assert "Permission required" in window.permission_labels["master4"].text()
+    assert window.details.picker.isEnabled() and window.details.apply_button.isEnabled()
+    window.details.select_control("key:278")
+    window.refresh_status()
+    assert window.details._backend_error == "Standard button capture unavailable"
+    status["mx_master4_buttons"] = {"errors": [], "active": [
+        {"vendor_id": 0x046d, "product_id": 0xb042, "control_id": "hidpp:416"}]}
+    window.details.select_control("hidpp:416")
+    window.refresh_status()
+    assert window.details._backend_error == ""
+    assert window.permission_labels["master4"].text() == "Ready"
+
+
 def test_window_startup_reloads_running_worker_and_selects_apps(isolated_qt, installed_app, monkeypatch):
     application, warnings = isolated_qt
     ensure = Mock(return_value=connected_status())

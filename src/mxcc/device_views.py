@@ -5,14 +5,14 @@ from __future__ import annotations
 from math import ceil, cos, radians, sin
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
+from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from .appearance import paint_neumorphic_surface
-from .device_artwork import draw_device_artwork
+from .device_artwork import _render_key, draw_device_artwork
 
 
 CREATIVE_CONSOLE_ID = "@creative-console"
@@ -284,7 +284,7 @@ class ConnectionIndicator(QWidget):
 
 
 class DeviceArt(QWidget):
-    """Offline product renders with scalable illustrations for unknown models."""
+    """Bundled/cached model photos, with an explicit placeholder when unmatched."""
 
     def __init__(self, kind: str = "device", parent=None):
         super().__init__(parent)
@@ -292,6 +292,12 @@ class DeviceArt(QWidget):
         self.kinds = None
         self.vendor_id = None
         self.product_id = None
+        self.model_name = ""
+        self.remote_model_name = ""
+        self.image_provider = None
+        self.image_key = None
+        self.remote_image = QImage()
+        self.device_connected = True
         self.controls_view = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -312,9 +318,39 @@ class DeviceArt(QWidget):
             self.kinds = kinds
             self.update()
 
-    def set_model(self, vendor_id, product_id):
-        if (vendor_id, product_id) != (self.vendor_id, self.product_id):
-            self.vendor_id, self.product_id = vendor_id, product_id
+    def set_model(self, vendor_id, product_id, name="", *, remote_name="", connected=True):
+        self.device_connected = connected
+        if (vendor_id, product_id, name, remote_name) != (self.vendor_id, self.product_id, self.model_name, self.remote_model_name):
+            self.vendor_id, self.product_id, self.model_name = vendor_id, product_id, name
+            self.remote_model_name = remote_name
+            self.image_key = None
+            self.remote_image = QImage()
+            self.update()
+        self._request_image()
+
+    def set_image_provider(self, provider):
+        if provider is self.image_provider:
+            return
+        if self.image_provider is not None:
+            self.image_provider.ready.disconnect(self._image_ready)
+        self.image_provider = provider
+        if provider is not None:
+            provider.ready.connect(self._image_ready)
+        self._request_image()
+
+    def _request_image(self):
+        if (self.image_provider is None or self.kinds is not None
+                or self.vendor_id != 0x046d or not self.remote_model_name
+                or _render_key(self.kind, self.vendor_id, self.product_id,
+                               name=self.model_name, controls=self.controls_view) is not None):
+            return
+        self.image_key = self.image_provider.request(
+            self.vendor_id, self.product_id, self.remote_model_name, connected=self.device_connected)
+        self._image_ready(self.image_key)
+
+    def _image_ready(self, key):
+        if key and key == self.image_key and self.image_provider is not None:
+            self.remote_image = self.image_provider.image(key)
             self.update()
 
     @staticmethod
@@ -358,8 +394,23 @@ class DeviceArt(QWidget):
     def _draw_device(self, painter, kind):
         vendor = self.vendor_id if self.kinds is None else None
         product = self.product_id if self.kinds is None else None
-        if draw_device_artwork(painter, kind, vendor, product, controls=self.controls_view):
+        name = self.model_name if self.kinds is None else ""
+        if draw_device_artwork(painter, kind, vendor, product, name=name, controls=self.controls_view):
             return
+        if self.kinds is None and not self.remote_image.isNull():
+            size = self.remote_image.size().toSizeF()
+            size.scale(220, 195, Qt.AspectRatioMode.KeepAspectRatio)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawImage(QRectF((260 - size.width()) / 2, (220 - size.height()) / 2,
+                                     size.width(), size.height()), self.remote_image)
+            return
+        painter.save()
+        placeholder = bool(name) and _render_key(kind, vendor, product, name=name,
+                                                controls=self.controls_view) is None
+        if placeholder:
+            # Leave space for the placeholder label within the artwork's 1.15x fit.
+            painter.translate(19.5, 0)
+            painter.scale(0.85, 0.85)
         self._shadow(painter, 130, 178 if kind == "keyboard" else 135)
         if kind == "keypad":
             self._keypad(painter)
@@ -375,6 +426,14 @@ class DeviceArt(QWidget):
             self._receiver(painter)
         else:
             self._generic(painter)
+        painter.restore()
+        if name:
+            painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+            font = QFont(self.font())
+            font.setPointSize(9)
+            painter.setFont(font)
+            painter.drawText(QRectF(10, 206, 240, 18), Qt.AlignmentFlag.AlignCenter,
+                             "Model image unavailable")
 
     def _keypad(self, p):
         self._body(p, QRectF(62, 17, 136, 188), 20)
@@ -586,7 +645,8 @@ class DeviceCard(_DeviceCardBase):
     def update_device(self, device):
         self.device = device
         self.art.set_kind(device.kind)
-        self.art.set_model(device.vendor_id, device.product_id)
+        self.art.set_model(device.vendor_id, device.product_id, device.model_name or device.name,
+                           remote_name=device.model_name, connected=device.connected)
         self.name_label.setText(device.name)
         self._set_indicators([device])
         self.support_label.setText("Customize" if device.supported else "Controls" if device.controls else "Device details")
@@ -696,8 +756,9 @@ class DevicesHome(QWidget):
     device_selected = Signal(str)
     ring_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, image_provider=None):
         super().__init__(parent)
+        self.image_provider = image_provider
         self.setObjectName("deviceHome")
         self.cards = {}
         self._devices = ()
@@ -743,6 +804,8 @@ class DevicesHome(QWidget):
     def update_devices(self, devices):
         devices = tuple(devices)
         if devices == self._devices:
+            for card in self.cards.values():
+                card.art._request_image()
             return
         self._devices = devices
         members = sorted((device for device in devices if is_console_device(device)),
@@ -758,6 +821,7 @@ class DevicesHome(QWidget):
         for identifier, value in entries:
             if identifier not in self.cards:
                 card = ConsoleCard(value, self.gallery) if identifier == CREATIVE_CONSOLE_ID else DeviceCard(value, self.gallery)
+                card.art.set_image_provider(self.image_provider)
                 card.clicked.connect(lambda checked=False, identifier=identifier: self.device_selected.emit(identifier))
                 self.cards[identifier] = card
             elif identifier == CREATIVE_CONSOLE_ID:
@@ -793,8 +857,9 @@ class ConsoleDevices(QWidget):
     back_requested = Signal()
     device_selected = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, image_provider=None):
         super().__init__(parent)
+        self.image_provider = image_provider
         self.setObjectName("consoleDevices")
         self.cards = {}
         self._devices = ()
@@ -853,6 +918,8 @@ class ConsoleDevices(QWidget):
         devices = tuple(sorted((device for device in devices if is_console_device(device)),
                                key=lambda device: (device.kind != "keypad", device.name, device.id)))
         if devices == self._devices:
+            for card in self.cards.values():
+                card.art._request_image()
             return
         self._devices = devices
         identifiers = {device.id for device in devices}
@@ -864,6 +931,7 @@ class ConsoleDevices(QWidget):
         for device in devices:
             if device.id not in self.cards:
                 card = DeviceCard(device, self.gallery)
+                card.art.set_image_provider(self.image_provider)
                 card.clicked.connect(lambda checked=False, identifier=device.id: self.device_selected.emit(identifier))
                 self.cards[device.id] = card
             else:

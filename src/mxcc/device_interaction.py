@@ -121,7 +121,8 @@ class InteractiveDeviceArt(DeviceArt):
         controls = tuple(device.controls if controls is None else controls)
         key = (device.id, device.vendor_id, device.product_id, device.kind, controls)
         self.set_kind(device.kind)
-        self.set_model(device.vendor_id, device.product_id)
+        self.set_model(device.vendor_id, device.product_id, device.model_name or device.name,
+                       remote_name=device.model_name, connected=device.connected)
         if key == self._device_key:
             return
         previous_id = self._device_key[0] if self._device_key else None

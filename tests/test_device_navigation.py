@@ -278,6 +278,68 @@ def test_new_device_controls_appear_and_empty_reports_do_not_invent_buttons(wind
     assert details.art.selected_control is None
 
 
+def open_master4(window):
+    model = Device("master4", "MX Master 4", "mouse", "Bluetooth", True, False, 0x046d, 0xb042,
+                   controls=controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse"),
+                   model_name="MX Master 4")
+    window._devices_updated([*window.devices.values(), model])
+    click(window.home.cards[model.id])
+    return window.details
+
+
+def test_master4_photo_and_selector_stay_in_sync_without_saving_on_selection(window):
+    details = open_master4(window)
+    settings_before = paths.settings_path().read_bytes()
+    runtime_before = paths.runtime_path().read_bytes()
+    expected = {"key:272", "key:273", "key:274", "key:275", "key:276", "key:278",
+                "hidpp:196", "hidpp:416", "rel:6"}
+    assert set(details.art.hotspots) == expected
+    for identifier, hotspot in details.art.hotspots.items():
+        # Programmatic click exercises the same signal route as its shape mask.
+        hotspot.click()
+        assert details.control_selector.currentData() == identifier
+        assert details.selected_control == details.art.selected_control == identifier
+        assert details.selected_title.text() == details.control_labels[identifier]
+        assert hotspot.isChecked()
+    for identifier in reversed(list(details.art.hotspots)):
+        details.control_selector.setCurrentIndex(details.control_selector.findData(identifier))
+        assert details.art.hotspots[identifier].isChecked()
+        assert details.selected_control == details.art.selected_control == identifier
+    assert paths.settings_path().read_bytes() == settings_before
+    assert paths.runtime_path().read_bytes() == runtime_before
+
+
+@pytest.mark.parametrize("supported_control", ["key:278", "hidpp:416"])
+def test_master4_gesture_and_haptic_can_open_ring_but_mode_and_wheels_cannot_apply(window, supported_control):
+    import json
+    details = open_master4(window)
+    before = paths.settings_path().read_bytes()
+    for identifier in ("hidpp:196", "rel:6", "rel:8"):
+        details.select_control(identifier)
+        assert not details.apply_button.isEnabled()
+        assert not details.picker.isEnabled()
+        assert details.explanation.isVisible() and details.explanation.text()
+        details.apply_mapping()
+    assert paths.settings_path().read_bytes() == before
+    details.art.hotspots[supported_control].click()
+    assert details.apply_button.isEnabled() and details.picker.isEnabled()
+    details.picker.category_buttons["system"].click()
+    details.picker.system_combo.setCurrentIndex(details.picker.system_combo.findData("open_ring"))
+    assert details.picker.value()["action"] == {"type": "open_ring"}
+    assert paths.settings_path().read_bytes() == before
+    details.apply_button.click()
+    expected = {"vendor_id": 0x046d, "product_id": 0xb042, "control_id": supported_control,
+                "label": "Action Ring", "icon": "view-grid", "action": {"type": "open_ring"}}
+    assert expected in window.settings["device_actions"]
+    assert expected["control_id"] in {entry["control_id"] for entry in
+                                       json.loads(paths.runtime_path().read_text())["device_actions"]}
+    window.show_home()
+    window.open_device("master4")
+    details.select_control(supported_control)
+    assert details.picker.value()["action"] == {"type": "open_ring"}
+    assert details.art.hotspots[supported_control].isChecked()
+
+
 def test_global_settings_returns_to_the_page_that_opened_it(window):
     click(window.footer.settings_button)
     assert window.views.currentWidget() is window.settings_page

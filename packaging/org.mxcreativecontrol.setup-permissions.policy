@@ -4,8 +4,8 @@
   <vendor>MX Creative Control contributors</vendor>
   <icon_name>mx-creative-control</icon_name>
   <action id="org.mxcreativecontrol.setup-permissions">
-    <description>Set up MX Creative Console access</description>
-    <message>Administrator authentication is required to allow this desktop session to access the MX Creative Keypad, MX Dialpad and emit shortcut keys.</message>
+    <description>Set up Logitech device access</description>
+    <message>Administrator authentication is required to allow this desktop session to access the MX Creative Keypad, MX Dialpad, MX Master 4 haptic panel and emit shortcut keys.</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>

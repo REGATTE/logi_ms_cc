@@ -29,7 +29,13 @@ An arm64 machine requires an arm64 build.
 The rounded settings window has no native title bar. Drag empty header or footer
 space to move it, use its edges to resize, and use the top-right icons to
 minimize, maximize/restore or close. Closing settings leaves the worker running.
-Device artwork is bundled for offline use.
+Artwork for the Creative Console, G402 and MX Master 4 is bundled for offline
+use. Other connected Logitech models download an exact matching product image
+from Logitech in the background, then reuse the cached image offline. The
+lookup sends only the hardware-reported model name, not a Bluetooth nickname,
+device address or serial number. No matching official image, or no network on
+the first lookup, leaves a labeled placeholder. Failed lookups retry after
+15 minutes; they never substitute a different model's photo.
 
 Connect the keypad over USB. Open **MX Creative Control** from Ubuntu's app
 launcher and select **MX Creative Console** on the device home screen. Choose
@@ -60,13 +66,26 @@ does not always correspond one-to-one with physical buttons; hidden proprietary
 controls may need a model description. A device without reported controls shows
 an empty state. Reading this metadata requires no additional input permissions.
 
-On the G402 and dialpad pages, click an outlined control in the device image to
+On the G402, MX Master 4 and dialpad pages, click an outlined control in the device image to
 select it in the control dropdown. Choosing a control in the dropdown highlights
 it on the image. For supported buttons, choose an application, keyboard shortcut
 or system action, then press **Apply**; **Remove** clears its mapping. Selecting
 a control alone does not change device behavior. Each wheel or dial is shown as
 one physical control; its mapping remains unavailable. Devices without known
 physical layouts still support selection through the dropdown.
+
+The MX Master 4 uses a front three-quarter view so its main buttons and side
+buttons can be selected together. Its Gesture button and, over Bluetooth, its
+**Haptic Sense Panel** can use the same action choices, including
+**System → Open Action Ring**. Select the panel on the image, choose an action,
+then press **Apply**. The panel uses temporary HID++ button diversion; removing
+its assignment, pausing the worker or quitting the worker restores its previous
+behavior. Closing the settings window leaves the worker and assignment active.
+Set up device permissions if the panel reports that access is required.
+The wheel-mode button can be selected, but its custom actions are not implemented.
+The main wheel's image selects **Wheel click**; wheel
+movement remains a separate dropdown entry. Any extra input reported by Linux
+without a verified physical location stays in the dropdown.
 
 The home screen lists connected Logitech USB/HID and Bluetooth devices, grouping
 the keypad and dialpad under **MX Creative Console**. The shared bottom-left
@@ -79,7 +98,8 @@ Both selection pages show each device's reported battery percentage beside its
 connection dot beneath the device. No percentage appears when battery data is
 unavailable.
 Discovery does not pair Bluetooth devices. Only explicit button assignments
-enable button capture; the dialpad uses temporary per-button diversion.
+enable button capture; the dialpad and MX Master 4 haptic panel use temporary
+per-button diversion.
 Connect just one supported keypad to use the editor; multiple keypads are
 shown individually, but their configuration cannot be targeted independently.
 Back controls return to the console or all devices. The Settings gear at the bottom left of every page opens

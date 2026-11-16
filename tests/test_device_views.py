@@ -7,7 +7,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -98,6 +99,99 @@ def test_connected_unknown_and_battery_are_not_invented(overview):
     assert overview.cards["keyboard"].indicators["keyboard"].state == "disconnected"
     assert "Connection unknown · USB" in overview.cards["receiver-mouse"].toolTip()
     assert "Dialpad · Connected · Bluetooth · 0% battery" in group.toolTip()
+
+
+def test_mouse_model_changes_update_both_home_and_detail_artwork(overview):
+    from mxcc.device_interaction import InteractiveDeviceArt
+
+    g402 = replace(device("mouse", kind="mouse"), name="G402 Gaming Mouse", product_id=0xc07e)
+    master = replace(g402, name="MX Master 4", product_id=0xb042, connection="Bluetooth")
+    overview.update_devices([g402])
+    card = overview.cards[g402.id]
+    detail = InteractiveDeviceArt()
+    detail.resize(260, 240)
+    detail.set_device(g402)
+    g402_card = card.art.grab().toImage()
+    g402_detail = detail.grab().toImage()
+
+    overview.update_devices([master])
+    detail.set_device(master)
+    assert overview.cards[master.id] is card
+    assert card.art.model_name == detail.model_name == "MX Master 4"
+    master_card = card.art.grab().toImage()
+    master_detail = detail.grab().toImage()
+    assert master_card != g402_card
+    assert master_detail != g402_detail
+    assert not detail.hotspots
+
+    # Receiver transport IDs may be unknown to the catalog. Name changes must
+    # also update the artwork when kind and IDs stay the same.
+    alias = replace(master, product_id=0xffff)
+    overview.update_devices([alias])
+    detail.set_device(alias)
+    assert card.art.grab().toImage() == master_card
+    assert detail.grab().toImage() == master_detail
+    unknown = replace(alias, name="MX Master 3S")
+    overview.update_devices([unknown])
+    detail.set_device(unknown)
+    assert card.art.grab().toImage() != master_card
+    assert detail.grab().toImage() != master_detail
+    detail.deleteLater()
+
+
+def test_downloaded_model_image_updates_cards_and_details_without_leaking_between_models(overview):
+    from mxcc.device_interaction import InteractiveDeviceArt
+
+    class Images(QObject):
+        ready = Signal(str)
+
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+            self.images = {}
+
+        def request(self, vendor, product, name, *, connected=True):
+            self.requests.append((vendor, product, name))
+            return f"{product}:{name}"
+
+        def image(self, key):
+            return self.images.get(key, QImage())
+
+    images = Images()
+    overview.image_provider = images
+    mouse = replace(device("mouse", kind="mouse"), name="Office pointer",
+                    product_id=0xb034, model_name="MX Master 3S")
+    overview.update_devices([mouse])
+    card = overview.cards[mouse.id]
+    detail = InteractiveDeviceArt()
+    detail.set_image_provider(images)
+    detail.resize(260, 240)
+    detail.set_device(mouse)
+    placeholder = card.art.grab().toImage()
+    assert images.requests and all(name == "MX Master 3S" for _, _, name in images.requests)
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#ff1223"))
+    key = card.art.image_key
+    images.images[key] = image
+    images.ready.emit(key)
+    assert card.art.grab().toImage() != placeholder
+    assert detail.grab().toImage().pixelColor(130, 120) == QColor("#ff1223")
+    assert not detail.hotspots
+
+    other = replace(mouse, product_id=0xf001, model_name="A different model")
+    overview.update_devices([other])
+    detail.set_device(other)
+    assert card.art.remote_image.isNull() and detail.remote_image.isNull()
+    images.ready.emit(key)  # An old in-flight response cannot paint a new device.
+    assert card.art.remote_image.isNull() and detail.remote_image.isNull()
+
+    # A bundled hardware ID does not download, even with a user nickname.
+    images.requests.clear()
+    bundled = replace(other, product_id=0xb042, model_name="MX Master 4")
+    overview.update_devices([bundled])
+    detail.set_device(bundled)
+    assert not images.requests
+    detail.deleteLater()
 
 
 def test_rescan_preserves_existing_card_focus_and_removes_disconnected_devices(overview):

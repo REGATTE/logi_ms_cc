@@ -24,6 +24,7 @@ from .appearance import AppearanceController
 from .configuration import compact_launchers, compile_runtime, load_settings, profile_for_app, save_settings
 from .customization import CustomizationWorkspace
 from .device_navigation import DeviceDetails, DeviceScanner
+from .device_image_cache import DeviceImageCache
 from .device_views import AppFooter, AppWindowControls, CREATIVE_CONSOLE_ID, ConsoleDevices, DevicesHome, is_console_device
 from .devices import discover_devices
 from .icons import FaceRenderer, display_icon, setup_icon_theme
@@ -65,6 +66,7 @@ class MainWindow(RoundedWindow):
         super().__init__()
         setup_icon_theme()
         self.connect_worker = connect_worker
+        self.device_images = DeviceImageCache(self, enabled=connect_worker)
         self.apps = discover_applications() if applications is None else list(applications)
         self.profiles = load_profiles()
         self.settings = load_settings(self.apps)
@@ -103,11 +105,11 @@ class MainWindow(RoundedWindow):
         self.window_controls.close_requested.connect(self.close)
         self.window_state_changed.connect(
             lambda: self.window_controls.set_maximized(self.isMaximized() or self.isFullScreen()))
-        self.home = DevicesHome()
+        self.home = DevicesHome(image_provider=self.device_images)
         self.views.addWidget(self.home)
         self.home.device_selected.connect(self.open_device)
         self.home.ring_requested.connect(self.show_ring)
-        self.console = ConsoleDevices()
+        self.console = ConsoleDevices(image_provider=self.device_images)
         self.views.addWidget(self.console)
         self.console.back_requested.connect(self.show_home)
         self.console.device_selected.connect(self.open_device)
@@ -158,7 +160,7 @@ class MainWindow(RoundedWindow):
         content.addWidget(self.notice)
         self.navigation.currentRowChanged.connect(self._navigate_editor)
         self.navigation.setCurrentRow(0)
-        self.details = DeviceDetails(applications=self.apps)
+        self.details = DeviceDetails(applications=self.apps, image_provider=self.device_images)
         self.details.back_requested.connect(self._back_to_devices)
         self.details.mapping_changed.connect(self.assign_device_action)
         self.details.edit_ring_requested.connect(self.show_ring)
@@ -589,7 +591,8 @@ class MainWindow(RoundedWindow):
         self.permission_labels = {}
         form = QFormLayout()
         form.setVerticalSpacing(22)
-        for key, title in (("keypad", "Keypad access"), ("dialpad", "Dialpad button access"), ("input", "Shortcut input"),
+        for key, title in (("keypad", "Keypad access"), ("dialpad", "Dialpad button access"),
+                           ("master4", "MX Master 4 haptic panel access"), ("input", "Shortcut input"),
                            ("focus", "App detection"), ("tray", "Panel icon")):
             value = label("Not checked", wrap=True)
             self.permission_labels[key] = value
@@ -1261,6 +1264,7 @@ class MainWindow(RoundedWindow):
         self.start_worker(preserve_context=ring_layout is not None)
 
     def closeEvent(self, event):
+        self.device_images.stop()
         self.device_timer.stop()
         self.timer.stop()
         super().closeEvent(event)
@@ -1285,7 +1289,10 @@ class MainWindow(RoundedWindow):
         status = self.status
         device = self.devices.get(self.selected_device_id)
         if device is not None:
-            backend = status.get("dialpad_buttons" if device.product_id == 0xbc00 else "device_buttons", {})
+            backend_name = ("dialpad_buttons" if device.product_id == 0xbc00 else
+                            "mx_master4_buttons" if device.product_id == 0xb042 and
+                            self.details.selected_control == "hidpp:416" else "device_buttons")
+            backend = status.get(backend_name, {})
             self.details.set_backend_status("\n".join(backend.get("errors", [])))
         self.connection.setText("Paused" if status.get("paused") else "Keypad connected" if status.get("connected") else "Keypad disconnected")
         self.active_label.setText("Active application: " + (status.get("active_app") or "—"))
@@ -1295,6 +1302,11 @@ class MainWindow(RoundedWindow):
             "Permission required · use Set up device permissions below" if dialpad_status.get("permission_required") else
             "Ready" if dialpad_status.get("active") else
             "\n".join(dialpad_status.get("errors", [])) or "Assign a dialpad button to check access")
+        master4_status = status.get("mx_master4_buttons", {})
+        self.permission_labels["master4"].setText(
+            "Permission required · use Set up device permissions below" if master4_status.get("permission_required") else
+            "Ready" if master4_status.get("active") else
+            "\n".join(master4_status.get("errors", [])) or "Assign the haptic panel to check access")
         self.permission_labels["input"].setText("Ready" if status.get("input_access") else "Permission required for /dev/uinput")
         self.permission_labels["focus"].setText("Ready · X11" if status.get("focus_supported") else "Manual selection · automatic detection unavailable")
         self.permission_labels["tray"].setText("Ready" if status.get("tray_available") else "No panel host found. Open settings from the application launcher; on GNOME, enable AppIndicator support.")
@@ -1317,7 +1329,7 @@ class MainWindow(RoundedWindow):
             QMessageBox.information(self, "Install the Ubuntu package", "Device permission setup is included in the .deb package. Install it first, then reopen this dialog.")
             return
         details = ("Ubuntu will ask for administrator authentication.\n\n"
-                   "This installs access rules for the MX Creative Keypad and Bluetooth MX Dialpad, and enables /dev/uinput so the app can send keyboard shortcuts. "
+                   "This installs access rules for the MX Creative Keypad, Bluetooth MX Dialpad and MX Master 4 haptic panel, and enables /dev/uinput so the app can send keyboard shortcuts. "
                    "The input permission also lets other programs in your logged-in session create virtual input devices.\n\n"
                    "The settings window and background worker continue running as your normal user.")
         if QMessageBox.question(self, "Allow keypad and shortcut access?", details,

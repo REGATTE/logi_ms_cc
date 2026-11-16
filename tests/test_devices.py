@@ -47,8 +47,10 @@ def input_node(hid, index, *, keys=(), relative=()):
     return path.parent
 
 
-def bluez(address='AA:BB:CC:DD:EE:FF', *, connected=True, modalias='usb:v046DpBC00d0016', name='MX Dialpad', battery=None):
+def bluez(address='AA:BB:CC:DD:EE:FF', *, connected=True, modalias='usb:v046DpBC00d0016', name='MX Dialpad', alias=None, battery=None):
     entry = {'org.bluez.Device1': {'Address': address, 'Connected': connected, 'Name': name, 'Modalias': modalias}}
+    if alias is not None:
+        entry['org.bluez.Device1']['Alias'] = alias
     if battery is not None:
         entry['org.bluez.Battery1'] = {'Percentage': battery}
     return {f'/org/bluez/hci0/dev_{address.replace(":", "_")}': entry}
@@ -72,6 +74,7 @@ def test_composite_usb_device_is_one_card_and_non_logitech_is_excluded(inventory
         ('MX Creative Keypad', 'keypad', True), ('Gaming Mouse G402', 'mouse', False)]
     assert all(device.connection == 'USB' and device.connected is True for device in result)
     assert all(device.battery_percent is None for device in result)
+    assert [device.model_name for device in result] == ['MX Creative Keypad', 'Gaming Mouse G402']
 
 
 def test_serial_keeps_identity_stable_across_usb_port_change(inventory):
@@ -110,9 +113,55 @@ def test_multiple_bluetooth_interfaces_preserve_bluez_name_and_battery(inventory
         modalias='usb:v046DpB034d0001', name='Logitech MX Master 3S', battery=64))
     assert result.id == 'bluetooth:aa:bb:cc:dd:ee:ff'
     assert result.name == 'MX Master 3S'
+    assert result.model_name == 'MX Master 3S'
     assert result.kind == 'mouse'
     assert result.battery_percent == 64
     assert result.connected is True
+
+
+def test_bluetooth_alias_is_display_only_and_hardware_name_identifies_the_model(inventory):
+    result, = discover(inventory, bluez_objects=bluez(
+        modalias='usb:v046DpB034d0001', name='Logitech MX Master 3S',
+        alias='Personal office keyboard', battery=64))
+    assert result.name == 'Personal office keyboard'
+    assert result.model_name == 'MX Master 3S'
+    assert result.kind == 'mouse'
+    assert result.battery_percent == 64
+
+
+@pytest.mark.parametrize('hardware_name', [None, '', 123, {'invalid': 'name'}])
+def test_bluetooth_alias_alone_is_never_a_model_name(inventory, hardware_name):
+    result, = discover(inventory, bluez_objects=bluez(
+        modalias='usb:v046DpB034d0001', name=hardware_name, alias='Personal office mouse'))
+    assert result.name == 'Personal office mouse'
+    assert result.model_name == ''
+
+
+def test_missing_bluez_model_name_uses_hid_name_without_losing_alias_or_battery(inventory):
+    _, hid = inventory
+    hid_node(hid, bus='0005', product='B034', name='Logitech MX Master 3S',
+             unique='aa:bb:cc:dd:ee:ff')
+    hid_node(hid, bus='0005', product='B034', name='HID consumer control',
+             unique='aa:bb:cc:dd:ee:ff', suffix='0002')
+    result, = discover(inventory, bluez_objects=bluez(
+        modalias='usb:v046DpB034d0001', name=None, alias='Personal pointer', battery=64))
+    assert result.name == 'Personal pointer'
+    assert result.model_name == 'MX Master 3S'
+    assert result.kind == 'mouse'
+    assert result.battery_percent == 64
+
+
+def test_usb_without_product_name_uses_hid_model_and_preserves_battery(inventory):
+    usb, hid = inventory
+    mouse = usb_node(usb, product='c07e', name='', serial='MOUSE')
+    hid_node(hid, parent=mouse, product='C07E', name='Logitech Gaming Mouse G402')
+    power = mouse / 'power_supply' / 'mouse-battery'
+    power.mkdir(parents=True)
+    (power / 'capacity').write_text('75')
+    result, = discover(inventory, bluez_objects={})
+    assert result.model_name == 'Gaming Mouse G402'
+    assert result.kind == 'mouse'
+    assert result.battery_percent == 75
 
 
 def test_disconnected_or_absent_bluez_device_does_not_leave_a_stale_card(inventory):
@@ -124,6 +173,7 @@ def test_disconnected_or_absent_bluez_device_does_not_leave_a_stale_card(invento
     result, = discover(inventory)
     assert result.connected is True
     assert result.battery_percent is None
+    assert result.model_name == 'MX Dialpad'
 
 
 def test_bluez_can_report_connected_non_hid_logitech_devices(inventory):
@@ -155,6 +205,8 @@ def test_receiver_is_not_a_mouse_and_paired_child_link_is_unknown(inventory):
     receiver = next(device for device in result if device.kind == 'receiver')
     assert receiver.connection == 'USB' and receiver.connected is True
     assert mouse.connection == 'USB receiver' and mouse.connected is None
+    assert mouse.model_name == 'MX Master 3'
+    assert receiver.model_name == 'USB Receiver'
     assert 'not reported' in mouse.detail
     assert not mouse.supported and not receiver.supported
 
@@ -174,6 +226,7 @@ def test_bluez_reader_uses_bounded_read_only_queries(monkeypatch):
         'Device AA:BB:CC:DD:EE:FF MX Dialpad\n',
         path + '\n' + path + '/service0001\n',
         '\n'.join(json.dumps({'type': kind, 'data': value}) for kind, value in [('b', True), ('s', 'usb:v046DpBC00d0016'), ('s', 'MX Dialpad')]),
+        json.dumps({'type': 's', 'data': 'Logitech MX Dialpad'}),
         json.dumps({'type': 'y', 'data': 63}),
     ]
     run = Mock(side_effect=[subprocess.CompletedProcess([], 0, response, '') for response in responses])
@@ -181,15 +234,17 @@ def test_bluez_reader_uses_bounded_read_only_queries(monkeypatch):
     result = devices._read_bluez()
     parsed, connected = devices._bluez_devices(result)
     assert parsed['aa:bb:cc:dd:ee:ff'].battery_percent == 63
+    assert parsed['aa:bb:cc:dd:ee:ff'].model_name == 'MX Dialpad'
     assert connected == {'aa:bb:cc:dd:ee:ff'}
     for call in run.call_args_list:
         assert call.kwargs['timeout'] <= 1
         assert call.kwargs.get('shell') is None
         assert not {'scan', 'pair', 'connect', 'disconnect', 'remove', 'set-property'} & set(call.args[0])
     assert run.call_args_list[0].args[0] == ['bluetoothctl', 'devices', 'Connected']
+    assert run.call_args_list[3].args[0][-2:] == ['org.bluez.Device1', 'Name']
 
 
-@pytest.mark.parametrize('failure', ['battery_timeout', 'device_timeout', 'deadline'])
+@pytest.mark.parametrize('failure', ['name_timeout', 'battery_timeout', 'device_timeout', 'deadline'])
 def test_bluez_property_failures_keep_gathered_devices_and_connected_addresses(monkeypatch, failure):
     first = '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF'
     second = '/org/bluez/hci0/dev_11_22_33_44_55_66'
@@ -201,6 +256,11 @@ def test_bluez_property_failures_keep_gathered_devices_and_connected_addresses(m
             output = 'Device AA:BB:CC:DD:EE:FF Zone headset\nDevice 11:22:33:44:55:66 Mouse\n'
         elif 'tree' in arguments:
             output = first + '\n' + second + '\n'
+        elif arguments[-1] == 'Name':
+            if first in arguments and failure == 'name_timeout':
+                raise subprocess.TimeoutExpired(arguments, 1)
+            name = 'Logitech Zone headset' if first in arguments else 'Logitech Mouse'
+            output = json.dumps({'type': 's', 'data': name})
         elif 'org.bluez.Device1' in arguments:
             if second in arguments and failure == 'device_timeout':
                 raise subprocess.TimeoutExpired(arguments, 1)
@@ -220,7 +280,11 @@ def test_bluez_property_failures_keep_gathered_devices_and_connected_addresses(m
     parsed, connected = devices._bluez_devices(result)
     assert connected == {'aa:bb:cc:dd:ee:ff', '11:22:33:44:55:66'}
     assert parsed['aa:bb:cc:dd:ee:ff'].name == 'Zone headset'
-    if failure == 'battery_timeout':
+    if failure == 'name_timeout':
+        assert parsed['aa:bb:cc:dd:ee:ff'].model_name == ''
+        assert parsed['aa:bb:cc:dd:ee:ff'].battery_percent == 63
+        assert parsed['11:22:33:44:55:66'].model_name == 'Mouse'
+    elif failure == 'battery_timeout':
         assert parsed['aa:bb:cc:dd:ee:ff'].battery_percent is None
         assert parsed['11:22:33:44:55:66'].battery_percent == 63
     elif failure == 'device_timeout':

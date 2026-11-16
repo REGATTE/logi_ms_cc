@@ -151,7 +151,7 @@ def test_old_worker_is_verified_stopped_and_restarted_with_installed_unit(lifecy
     unit, _, request, run, popen = lifecycle
     unit.write_text('[Service]\n')
     service.socket_path().touch()
-    old = {'ok': True, 'pid': 41}
+    old = {'ok': True, 'pid': 41, 'capabilities': ['device_actions_v1']}
     current = compatible_status(pid=42)
     order = []
     responses = iter([old, {'ok': True}, current])

@@ -207,6 +207,12 @@ fn relevant_hierarchy(flags: HierarchyMask) -> bool {
         != 0
 }
 
+fn hidpp_binding(binding: &DeviceBinding) -> bool {
+    binding.vendor_id == 0x046d
+        && (binding.product_id == 0xbc00
+            || (binding.product_id == 0xb042 && binding.control_id == "hidpp:416"))
+}
+
 fn control_label(binding: &DeviceBinding) -> Option<&'static str> {
     if binding.vendor_id != 0x046d {
         return None;
@@ -317,7 +323,7 @@ fn refresh_grabs(
             continue;
         };
         for (index, binding) in bindings.iter().enumerate() {
-            if binding.product_id == 0xbc00 {
+            if hidpp_binding(binding) {
                 continue;
             }
             if ids != &[u32::from(binding.vendor_id), u32::from(binding.product_id)] {
@@ -384,7 +390,7 @@ fn refresh_grabs(
         }
     }
     for (index, binding) in bindings.iter().enumerate() {
-        if binding.product_id == 0xbc00 {
+        if hidpp_binding(binding) {
             continue;
         }
         if !found.contains(&index) {
@@ -432,6 +438,10 @@ mod tests {
         assert_eq!(control_label(&binding(0xc07e, "button:1")), None);
         assert_eq!(control_label(&binding(0xc07e, "key:272")), None);
         assert_eq!(control_label(&binding(0xbc00, "button:1")), None);
+        assert!(hidpp_binding(&binding(0xb042, "hidpp:416")));
+        assert!(!hidpp_binding(&binding(0xb042, "key:278")));
+        assert!(!hidpp_binding(&binding(0xb042, "hidpp:196")));
+        assert!(!hidpp_binding(&binding(0xc07e, "hidpp:416")));
         assert_eq!(
             control_label(&binding(0xc001, "key:277")),
             Some("Button Forward")

@@ -49,6 +49,7 @@ pub struct Status {
     pub ring_error: Option<String>,
     pub device_buttons: serde_json::Value,
     pub dialpad_buttons: serde_json::Value,
+    pub mx_master4_buttons: serde_json::Value,
 }
 
 pub struct State {
@@ -107,6 +108,7 @@ impl State {
                     "actions_ring_v1".into(),
                     "actions_ring_v2".into(),
                     "device_actions_v1".into(),
+                    "mx_master4_haptic_v1".into(),
                 ],
                 pid: std::process::id(),
                 connected: false,
@@ -123,6 +125,7 @@ impl State {
                 last_error: None,
                 manual_profile: None,
                 ring_open: false,
+                mx_master4_buttons: serde_json::json!({"available":false,"backend":"hidpp","active":[],"errors":[]}),
                 dialpad_buttons: serde_json::json!({"available":false,"backend":"hidpp","active":[],"errors":[]}),
                 device_buttons: serde_json::json!({"available":false,"backend":"x11","active":[],"errors":[]}),
             },

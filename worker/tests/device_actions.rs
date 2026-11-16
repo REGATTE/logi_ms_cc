@@ -127,6 +127,10 @@ fn device_actions_reject_unsupported_targets_duplicates_and_executable_input() {
         (50000, "key:279"),
         (50000, "key:0272"),
         (50000, "button:1"),
+        (0xb042, "hidpp:196"),
+        (0xb042, "hidpp:0416"),
+        (0xbc00, "hidpp:416"),
+        (0xc07e, "hidpp:416"),
     ] {
         let mut item = mapping(json!({"type":"screenshot"}));
         item["product_id"] = json!(product);
@@ -153,6 +157,36 @@ fn device_actions_reject_unsupported_targets_duplicates_and_executable_input() {
     let mut value = base();
     value["device_actions"] = json!([{"vendor_id":1133,"product_id":49278,
                                      "control_id":"button:4","action":{"type":"screenshot"}}]);
+    assert!(read(value).is_err());
+}
+
+#[test]
+fn master4_haptic_action_is_model_scoped_and_obeys_pause_and_removal() {
+    let mut value = base();
+    value["device_actions"] = json!([{"vendor_id":1133,"product_id":0xb042,
+        "control_id":"hidpp:416","action":{"type":"open_ring"}}]);
+    let mut state = State::new(read(value.clone()).unwrap(), "x11".into());
+    let target = button(0xb042, "hidpp:416");
+    assert!(state.config.configured_bindings().contains(&target));
+    assert!(matches!(
+        state.device_action(&target),
+        Some(Action::OpenRing {})
+    ));
+    state.status.paused = true;
+    assert!(state.device_action(&target).is_none());
+    state.status.paused = false;
+    assert!(matches!(
+        state.device_action(&target),
+        Some(Action::OpenRing {})
+    ));
+    state.reload(read(base()).unwrap());
+    assert!(state.device_action(&target).is_none());
+    assert!(state
+        .status
+        .capabilities
+        .iter()
+        .any(|c| c == "mx_master4_haptic_v1"));
+    value["device_actions"][0]["vendor_id"] = json!(1234);
     assert!(read(value).is_err());
 }
 

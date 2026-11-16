@@ -16,7 +16,7 @@ from .paths import cache_dir, config_dir, runtime_path, socket_path
 SERVICE = "mx-creative-control.service"
 DEV_SERVICE = "mx-creative-control-dev.service"
 USER_UNIT = Path("/usr/lib/systemd/user") / SERVICE
-REQUIRED_CAPABILITY = "device_actions_v1"
+REQUIRED_CAPABILITY = "mx_master4_haptic_v1"
 # Only session/display locations needed by the worker and its settings launcher
 # cross into the transient service. Never copy the caller's entire environment.
 SESSION_ENVIRONMENT = (

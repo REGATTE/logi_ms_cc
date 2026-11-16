@@ -61,6 +61,39 @@ def test_new_mouse_gets_reported_buttons_and_one_slot_per_wheel(tmp_path, word_b
     assert {control.source for control in controls} == {"linux"}
 
 
+def test_mx_master_4_uses_physical_names_without_guessing_special_button_events():
+    controls = controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse")
+    by_id = {control.id: control for control in controls}
+    assert len(by_id) == len(controls) == 10
+    assert {identifier: by_id[identifier].label for identifier in
+            ("key:272", "key:273", "key:274", "key:275", "key:276")} == {
+        "key:272": "Left button", "key:273": "Right button", "key:274": "Wheel click",
+        "key:275": "Back button", "key:276": "Forward button"}
+    assert {identifier: by_id[identifier].label for identifier in
+            ("key:278", "hidpp:196", "hidpp:416")} == {
+        "key:278": "Gesture button", "hidpp:196": "Wheel mode button",
+        "hidpp:416": "Haptic Sense Panel"}
+    assert [(control.id, control.label) for control in controls if control.kind == "wheel"] == [
+        ("rel:8", "Scroll wheel"), ("rel:6", "Thumb wheel")]
+    assert {control.source for control in controls} == {"model"}
+    assert "key:277" not in by_id and "hidpp:195" not in by_id
+    assert controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="device") == controls
+    assert controls_for_device(vendor_id=0x1234, product_id=0xb042, kind="mouse") == ()
+
+
+@pytest.mark.parametrize("word_bits", [32, 64])
+def test_mx_master_4_retains_reported_extra_button_ids_without_physical_claims(tmp_path, word_bits):
+    first = input_node(tmp_path, keys=(272, 275, 277, 278), rel=(6, 8, 11, 12), word_bits=word_bits)
+    second = input_node(tmp_path, "second", keys=(277, 278, 279, 30), word_bits=word_bits)
+    controls = controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse",
+                                   input_paths=(first, second, first), word_bits=word_bits)
+    assert len({control.id for control in controls}) == len(controls) == 11
+    assert controls[-1] == DeviceControl("key:277", "Additional reported button 6", "button", "linux")
+    assert controls[:10] == controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse")
+    assert controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse",
+                               input_paths=(second, first), word_bits=word_bits) == controls
+
+
 def test_keyboard_and_consumer_controls_are_discovered_without_model_support(tmp_path):
     node = input_node(tmp_path, keys=(0, 30, 115, 164, 212, 0x148, 0x14a, 0x14b, 0x220), rel=(0, 1, 7))
     controls = generic(node, kind="device")

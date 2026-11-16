@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .action_picker import ActionPicker
+from .actions import supported_device_target
 from .customization import CustomizationWorkspace
 from .device_views import ConnectionIndicator
 from .device_interaction import InteractiveDeviceArt
@@ -89,7 +90,7 @@ class DeviceDetails(QWidget):
     mapping_changed = Signal(str, object)
     edit_ring_requested = Signal()
 
-    def __init__(self, parent=None, *, applications=()):
+    def __init__(self, parent=None, *, applications=(), image_provider=None):
         super().__init__(parent)
         self.setObjectName("deviceDetails")
         self._bindings = []
@@ -138,6 +139,7 @@ class DeviceDetails(QWidget):
         scope_hint.setWordWrap(True)
         artwork.addWidget(scope_hint)
         self.art = InteractiveDeviceArt("keypad")
+        self.art.set_image_provider(image_provider)
         self.art.setMinimumSize(300, 260)
         self.art.control_selected.connect(self.select_control)
         artwork.addWidget(self.art, 1)
@@ -312,12 +314,7 @@ class DeviceDetails(QWidget):
         control = self.controls.get(identifier)
         if control is None or control.kind != "button" or self._device.vendor_id != 0x046d:
             return False
-        product = self._device.product_id
-        if product == 0xc07e:
-            return identifier in ("button:4", "button:5")
-        if product == 0xbc00:
-            return identifier in ("button:1", "button:2", "button:3", "button:4")
-        return identifier in {f"key:{code}" for code in range(0x110, 0x117)}
+        return supported_device_target(self._device.vendor_id, self._device.product_id, identifier)
 
     def set_backend_status(self, error):
         self._backend_error = error or ""
@@ -337,7 +334,9 @@ class DeviceDetails(QWidget):
         if identifier is None:
             message = "Select a control on the device or from the list above."
         elif not supported:
-            message = ("Dial and roller movement mappings are not available yet."
+            message = ("Custom actions for this MX Master 4 button are not supported yet."
+                       if self._device.product_id == 0xb042 and identifier == "hidpp:196" else
+                       "Dial and roller movement mappings are not available yet."
                        if self.controls[identifier].kind in ("dial", "wheel", "scroll", "axis")
                        else "Mapping actions for this control are not available yet.")
         else:

@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -115,4 +115,86 @@ def test_unknown_layout_retains_list_selection_without_invented_hotspots_or_sign
     assert art.selected_control == "key:272"
     assert selected == []
     art.set_device(unknown, controls=())
+    assert art.selected_control is None
+
+
+def master4():
+    controls = controls_for_device(vendor_id=0x046d, product_id=0xb042, kind="mouse")
+    return Device("master4", "MX Master 4", "mouse", "Bluetooth", True, False,
+                  0x046d, 0xb042, controls=controls + (
+                      DeviceControl("key:277", "Additional reported button 6", "button", "linux"),),
+                  model_name="MX Master 4")
+
+
+MASTER4_HOTSPOTS = {"key:272", "key:273", "key:274", "key:275", "key:276", "key:278",
+                    "hidpp:196", "hidpp:416", "rel:6"}
+
+
+def interior_point(hotspot):
+    """Find a real painted/masked point without assuming a rectangular button."""
+    bounds = hotspot.shape.boundingRect().toAlignedRect()
+    center = bounds.center()
+    points = [center]
+    points.extend(QPoint(x, y) for y in range(bounds.top() + 2, bounds.bottom(), 2)
+                  for x in range(bounds.left() + 2, bounds.right(), 2))
+    return next(point for point in points
+                if hotspot.shape.contains(QPointF(point)) and hotspot.mask().contains(point))
+
+
+def test_master4_photo_controls_are_selectable_with_mouse_and_keyboard(art):
+    selected = []
+    art.control_selected.connect(selected.append)
+    model = master4()
+    art.set_device(model)
+    assert set(art.hotspots) == MASTER4_HOTSPOTS
+    labels = {control.id: control.label for control in model.controls}
+    for identifier, hotspot in art.hotspots.items():
+        point = interior_point(hotspot)
+        assert art.childAt(hotspot.mapTo(art, point)) is hotspot
+        QTest.mouseClick(hotspot, Qt.MouseButton.LeftButton, pos=point)
+        assert art.selected_control == selected[-1] == identifier
+        assert hotspot.isChecked()
+        assert all(other.isChecked() == (key == identifier) for key, other in art.hotspots.items())
+        assert hotspot.accessibleName() == labels[identifier]
+        hotspot.setFocus()
+        QTest.keyClick(hotspot, Qt.Key.Key_Return)
+        QTest.keyClick(hotspot, Qt.Key.Key_Space)
+        assert selected[-3:] == [identifier] * 3
+    assert "rel:8" not in art.hotspots  # The wheel surface selects its click action.
+    assert "key:277" not in art.hotspots  # No invented physical position.
+
+
+@pytest.mark.parametrize("size", [(260, 240), (520, 600), (300, 700), (780, 240)])
+def test_master4_region_hit_testing_tracks_resize_and_letterboxing(art, size):
+    art.set_device(master4())
+    art.set_selected_control("key:278")
+    art.resize(*size)
+    QApplication.processEvents()
+    for identifier, hotspot in art.hotspots.items():
+        local = interior_point(hotspot)
+        point = hotspot.mapTo(art, local)
+        assert art.rect().contains(point)
+        assert art.childAt(point) is hotspot
+        assert hotspot.hitButton(hotspot.mapFrom(art, point))
+        assert not hotspot.hitButton(QPoint(0, 0))
+        QTest.mouseClick(hotspot, Qt.MouseButton.LeftButton, pos=hotspot.mapFrom(art, point))
+        assert art.selected_control == identifier
+
+
+def test_master4_refresh_preserves_selection_and_other_ids_do_not_borrow_regions(art):
+    model = master4()
+    art.set_device(model)
+    art.set_selected_control("key:278")
+    gesture = art.hotspots["key:278"]
+    gesture.setFocus()
+    art.set_device(replace(model, battery_percent=35))
+    assert art.hotspots["key:278"] is gesture
+    assert gesture.hasFocus() and gesture.isChecked()
+    assert art.selected_control == "key:278"
+    for other in (replace(model, product_id=0xffff), replace(model, vendor_id=0x1234)):
+        art.set_device(other)
+        assert not art.hotspots
+    art.set_device(model)
+    art.set_device(model, controls=tuple(control for control in model.controls if control.id != "key:278"))
+    assert "key:278" not in art.hotspots
     assert art.selected_control is None

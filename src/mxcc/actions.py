@@ -105,6 +105,8 @@ def supported_device_target(vendor_id, product_id, control_id):
         return control_id in ("button:4", "button:5")
     if product_id == 0xbc00:
         return control_id in ("button:1", "button:2", "button:3", "button:4")
+    if product_id == 0xb042 and control_id == "hidpp:416":
+        return True
     return control_id in tuple(f"key:{code}" for code in range(272, 279))
 
 
