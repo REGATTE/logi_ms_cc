@@ -1,4 +1,5 @@
-use crate::config::{Action, Config, DeviceBinding, Page};
+use crate::config::{Action, Config, DeviceBinding, Page, WebsiteProfile};
+use crate::website::{BrowserContext, BrowserReport, WebsiteSnapshot};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,8 @@ pub enum Request {
     RingExecute { token: String, slot: usize },
     RingCancel { token: String },
     RingConfigure { token: String },
+    BrowserContext(BrowserReport),
+    BrowserDisconnect { browser: String, session: String },
     Shutdown {},
 }
 
@@ -39,6 +42,12 @@ pub struct Status {
     pub session: String,
     pub focus_supported: bool,
     pub active_app: String,
+    pub browser_connected: bool,
+    pub browser_error: Option<String>,
+    pub active_website: Option<String>,
+    pub website_profile: Option<String>,
+    pub website_source: Option<String>,
+    pub embedded_browser: crate::embedded::Status,
     pub page: usize,
     pub paused: bool,
     pub tray_available: bool,
@@ -49,6 +58,7 @@ pub struct Status {
     pub ring_error: Option<String>,
     pub device_buttons: serde_json::Value,
     pub dialpad_buttons: serde_json::Value,
+    pub dialpad_dial: serde_json::Value,
     pub mx_master4_buttons: serde_json::Value,
 }
 
@@ -57,6 +67,8 @@ pub struct State {
     pub status: Status,
     foreground: Foreground,
     launch_context: Option<LaunchContext>,
+    browser: BrowserContext,
+    embedded: crate::embedded::Context,
 }
 
 struct LaunchContext {
@@ -100,6 +112,8 @@ impl State {
             config,
             foreground: Foreground::default(),
             launch_context: None,
+            browser: BrowserContext::default(),
+            embedded: crate::embedded::Context::default(),
             status: Status {
                 ok: true,
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -109,6 +123,9 @@ impl State {
                     "actions_ring_v2".into(),
                     "device_actions_v1".into(),
                     "mx_master4_haptic_v1".into(),
+                    "website_profiles_v1".into(),
+                    "dialpad_dial_v1".into(),
+                    "embedded_browser_v1".into(),
                 ],
                 pid: std::process::id(),
                 connected: false,
@@ -119,6 +136,12 @@ impl State {
                 session,
                 focus_supported: false,
                 active_app: String::new(),
+                browser_connected: false,
+                browser_error: None,
+                active_website: None,
+                website_profile: None,
+                website_source: None,
+                embedded_browser: crate::embedded::Status::default(),
                 page: 0,
                 paused: false,
                 tray_available: false,
@@ -127,6 +150,7 @@ impl State {
                 ring_open: false,
                 mx_master4_buttons: serde_json::json!({"available":false,"backend":"hidpp","active":[],"errors":[]}),
                 dialpad_buttons: serde_json::json!({"available":false,"backend":"hidpp","active":[],"errors":[]}),
+                dialpad_dial: serde_json::json!({"available":false,"backend":"hidpp","active":[],"errors":[]}),
                 device_buttons: serde_json::json!({"available":false,"backend":"x11","active":[],"errors":[]}),
             },
         }
@@ -234,6 +258,8 @@ impl State {
         let changed = self.foreground != foreground;
         let previous_page = self.status.page;
         self.status.active_app = foreground.name.clone();
+        self.browser.focus_changed(&foreground);
+        self.embedded.focus_changed(&foreground);
         self.foreground = foreground;
         let expired = self.tick(now);
         if let Some(context) = &mut self.launch_context {
@@ -250,7 +276,14 @@ impl State {
     /// Tracking failure must never leave shortcuts for an unconfirmed app.
     pub fn set_focus_supported(&mut self, supported: bool) -> bool {
         self.status.focus_supported = supported;
-        !supported && self.cancel_launch()
+        if !supported {
+            self.browser.focus_changed(&Foreground::default());
+            self.embedded.focus_changed(&Foreground::default());
+            self.refresh_website_status(Instant::now());
+            self.cancel_launch()
+        } else {
+            false
+        }
     }
 
     /// The worker can fold this deadline into its existing blocking poll.
@@ -258,13 +291,33 @@ impl State {
         self.launch_context
             .as_ref()
             .and_then(|context| context.waiting_until)
+            .into_iter()
+            .chain(self.browser.deadline())
+            .chain(self.embedded.deadline())
+            .min()
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
-        if self.deadline().is_some_and(|deadline| now >= deadline) {
-            return self.cancel_launch();
-        }
-        false
+        let previous = (
+            self.status.active_website.clone(),
+            self.status.browser_connected,
+            self.status.browser_error.clone(),
+        );
+        self.browser.tick(now);
+        self.embedded.tick(now);
+        self.refresh_website_status(now);
+        let changed = previous
+            != (
+                self.status.active_website.clone(),
+                self.status.browser_connected,
+                self.status.browser_error.clone(),
+            );
+        let launch_expired = self
+            .launch_context
+            .as_ref()
+            .and_then(|context| context.waiting_until)
+            .is_some_and(|deadline| now >= deadline);
+        (launch_expired && self.cancel_launch()) || changed
     }
 
     fn profile_exists(&self, id: &str) -> bool {
@@ -281,6 +334,7 @@ impl State {
 
     pub fn reload(&mut self, config: Config) {
         self.config = config;
+        self.refresh_website_status(Instant::now());
         if self.launch_context.as_ref().is_some_and(|context| {
             !self.config.auto_switch
                 || !self.profile_exists(&context.profile_id)
@@ -302,11 +356,155 @@ impl State {
         }
     }
 
+    fn refresh_website_status(&mut self, now: Instant) {
+        self.status.browser_connected = self.browser.connected(now);
+        self.status.browser_error = self.browser.error(now);
+        self.status.embedded_browser = self.embedded.status(now);
+        let snapshot = self.website_snapshot(&self.foreground, now);
+        self.status.website_source = snapshot.as_ref().map(|snapshot| snapshot.source.into());
+        self.status.active_website = snapshot.map(|snapshot| snapshot.domain);
+        self.status.website_profile = self
+            .status
+            .active_website
+            .as_ref()
+            .filter(|domain| {
+                self.config
+                    .website_profiles
+                    .iter()
+                    .any(|profile| &profile.domain == *domain)
+            })
+            .cloned();
+    }
+
+    pub fn browser_context(
+        &mut self,
+        report: &BrowserReport,
+        foreground: Foreground,
+        now: Instant,
+    ) -> Result<(), String> {
+        if self.status.session != "x11" {
+            return Err("Website shortcuts require an Ubuntu on Xorg session".into());
+        }
+        self.focus_changed(foreground.clone(), now);
+        let result = self.browser.update(report, &foreground, now);
+        self.refresh_website_status(now);
+        result
+    }
+
+    pub fn browser_disconnect(
+        &mut self,
+        browser: &str,
+        session: &str,
+        now: Instant,
+    ) -> Result<(), String> {
+        let result = self.browser.disconnect(browser, session);
+        self.refresh_website_status(now);
+        result
+    }
+
+    pub fn website_snapshot(
+        &self,
+        foreground: &Foreground,
+        now: Instant,
+    ) -> Option<WebsiteSnapshot> {
+        if crate::embedded::is_chatgpt(foreground) {
+            self.embedded.snapshot(foreground, now)
+        } else {
+            self.browser.snapshot(foreground, now)
+        }
+    }
+
+    pub fn foreground(&self) -> &Foreground {
+        &self.foreground
+    }
+
+    pub fn embedded_target(&mut self, target: crate::embedded::Target, now: Instant) {
+        self.embedded.target(target);
+        self.refresh_website_status(now);
+    }
+
+    pub fn embedded_report(
+        &mut self,
+        observation: crate::embedded::Observation,
+        foreground: &Foreground,
+        pid: u32,
+        now: Instant,
+    ) -> Result<(), String> {
+        let result = self.embedded.update(observation, foreground, pid, now);
+        self.refresh_website_status(now);
+        result
+    }
+
+    pub fn website_snapshot_current(&self, snapshot: &WebsiteSnapshot, now: Instant) -> bool {
+        self.website_snapshot(&self.foreground, now).as_ref() == Some(snapshot)
+    }
+
+    pub fn active_website_profile(&self) -> Option<&WebsiteProfile> {
+        self.active_website_profile_at(Instant::now())
+    }
+
+    fn active_website_profile_at(&self, now: Instant) -> Option<&WebsiteProfile> {
+        let snapshot = self.website_snapshot(&self.foreground, now)?;
+        self.config
+            .website_profiles
+            .iter()
+            .find(|profile| profile.domain == snapshot.domain)
+    }
+
+    /// Intercept website-only controls only while their exact website is active.
+    pub fn configured_bindings(&self) -> Vec<DeviceBinding> {
+        let mut bindings = self.config.configured_bindings();
+        if let Some(profile) = self.active_website_profile() {
+            for binding in profile
+                .device_actions
+                .iter()
+                .map(|mapping| mapping.binding())
+            {
+                if !bindings.contains(&binding) {
+                    bindings.push(binding);
+                }
+            }
+        }
+        bindings
+    }
     pub fn device_action(&self, binding: &DeviceBinding) -> Option<Action> {
+        self.device_action_at(binding, Instant::now())
+    }
+
+    fn device_action_at(&self, binding: &DeviceBinding, now: Instant) -> Option<Action> {
         if self.status.paused {
             None
         } else {
-            self.config.device_action(binding)
+            self.active_website_profile_at(now)
+                .and_then(|profile| {
+                    profile
+                        .device_actions
+                        .iter()
+                        .find(|mapping| mapping.binding() == *binding)
+                        .map(|mapping| mapping.action.clone())
+                })
+                .or_else(|| self.config.device_action(binding))
         }
+    }
+
+    /// Capture the exact action and foreground context before intercepting dial input.
+    /// Comparing again at dispatch prevents queued rotations following focus or tab changes.
+    pub fn dial_capture(&self, now: Instant) -> Option<crate::dial::Capture> {
+        if self.status.session != "x11" || self.foreground.window == 0 {
+            return None;
+        }
+        let Action::DialShortcut {
+            clockwise,
+            counterclockwise,
+        } = self.device_action_at(&DeviceBinding::main_dial(), now)?
+        else {
+            return None;
+        };
+        Some(crate::dial::Capture {
+            foreground: self.foreground.clone(),
+            website: self.website_snapshot(&self.foreground, now),
+            clockwise,
+            counterclockwise,
+        })
     }
 }

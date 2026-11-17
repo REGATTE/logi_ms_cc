@@ -83,7 +83,7 @@ def test_compile_two_pages_uses_original_icon_and_installed_apps(monkeypatch, tm
     assert ("New tab", "tab-new", None) in calls
     assert [profile["id"] for profile in runtime["profiles"]] == ["firefox"]
     assert runtime["pages"][1]["keys"][0]["action"] == {"type": "shortcut", "keys": "Ctrl+C"}
-    assert set(runtime) == {"version", "auto_switch", "pages", "profiles", "action_ring", "device_actions"}
+    assert set(runtime) == {"version", "auto_switch", "pages", "profiles", "action_ring", "device_actions", "website_profiles"}
 
 
 def test_launcher_compaction_does_not_move_shortcut_slots():

@@ -13,6 +13,7 @@ from mxcc.actions import (launcher_available, launcher_entry, profile_entry_acti
 from mxcc.applications import Application
 from mxcc.configuration import compact_launchers, compile_runtime, default_settings, save_settings, validate_settings
 from mxcc.profiles import validate_profile
+from mxcc.ring_configuration import validate_ring
 from mxcc.transfer import export_bundle, read_bundle
 
 
@@ -91,6 +92,56 @@ def test_master4_haptic_ring_assignment_survives_export_and_runtime_compilation(
     assert restored["device_actions"] == [assignment]
     runtime = compile_runtime(restored, [], profiles, lambda *_: "face.jpg")
     assert runtime["device_actions"] == [panel | {"action": {"type": "open_ring"}}]
+
+
+def test_large_dial_directions_normalize_export_and_compile_in_global_and_website_scopes(tmp_path):
+    dial = target(control_id="dial:main")
+    assignment = dial | entry("dial_shortcut", clockwise="control+right", counterclockwise="left")
+    settings = default_settings([])
+    settings["device_actions"] = [assignment]
+    settings["website_profiles"] = [{"domain": "10.64.192.14", "device_actions": [assignment], "ring": None}]
+    source = tmp_path / "dial.json"
+    export_bundle(source, settings, {})
+    restored, profiles = read_bundle(source)
+    normalized = {"type": "dial_shortcut", "clockwise": "Ctrl+Right", "counterclockwise": "Left"}
+    assert restored["device_actions"][0]["action"] == normalized
+    assert restored["website_profiles"][0]["device_actions"][0]["action"] == normalized
+    runtime = compile_runtime(restored, [], profiles, lambda *_: "face.jpg")
+    assert runtime["device_actions"] == [dial | {"action": normalized}]
+    assert runtime["website_profiles"][0]["device_actions"] == [dial | {"action": normalized}]
+    assert assignment["action"]["clockwise"] == "control+right"
+
+
+@pytest.mark.parametrize("changes", [
+    {}, {"control_id": "wheel:roller"}, {"product_id": 0xb042, "control_id": "dial:main"},
+    {"product_id": 0xb042, "control_id": "hidpp:416"}, {"product_id": 0xc07e, "control_id": "button:4"},
+])
+def test_directional_actions_reject_non_dial_device_targets(changes):
+    with pytest.raises(ValueError):
+        validate_device_actions([target(**changes) | entry("dial_shortcut", clockwise="Right", counterclockwise="Left")])
+
+
+@pytest.mark.parametrize("action", [
+    {"type": "shortcut", "keys": "Right"}, {"type": "screenshot"}, {"type": "open_ring"},
+    {"type": "dial_shortcut", "clockwise": "Right"},
+    {"type": "dial_shortcut", "clockwise": "Right", "counterclockwise": ""},
+    {"type": "dial_shortcut", "clockwise": "Right", "counterclockwise": "Left", "keys": "Right"},
+])
+def test_large_dial_requires_exact_pair_of_valid_shortcuts(action):
+    with pytest.raises(ValueError):
+        validate_device_actions([target(control_id="dial:main") | entry() | {"action": action}])
+
+
+def test_directional_actions_cannot_leak_into_keys_profiles_or_rings():
+    action = entry("dial_shortcut", clockwise="Right", counterclockwise="Left")
+    with pytest.raises(ValueError):
+        validate_action_entry(action)
+    with pytest.raises(ValueError):
+        validate_settings(default_settings([]) | {"launchers": [action] + [None] * 8})
+    with pytest.raises(ValueError):
+        validate_profile({"version": 1, "id": "test", "name": "Test", "shortcuts": [{"slot": 1, **action}]})
+    with pytest.raises(ValueError):
+        validate_ring({"layouts": {"default": [action]}, "bindings": []})
 
 
 @pytest.mark.parametrize("value", [

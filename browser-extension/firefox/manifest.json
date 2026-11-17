@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "MX Creative Control Website Shortcuts",
+  "version": "0.1.0",
+  "description": "Switch local Logitech button shortcuts and Action Rings with the current website.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "website-shortcuts@mxcreativecontrol.local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": ["tabs", "nativeMessaging"],
+  "background": {"scripts": ["background.js"], "persistent": true},
+  "browser_action": {
+    "default_title": "MX Creative Control Website Shortcuts",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": "script-src 'self'; object-src 'none'"
+}

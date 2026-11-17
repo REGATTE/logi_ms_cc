@@ -19,10 +19,13 @@ pub enum Event {
     Page(usize),
     Pause(bool),
     DeviceButton(DeviceBinding),
+    DeviceRotate(crate::dialpad_dial::Rotation),
     RingExited(String, Option<String>),
     DeviceButtonsStatus(serde_json::Value),
     DialpadButtonsStatus(serde_json::Value),
+    DialpadDialStatus(serde_json::Value),
     Master4ButtonsStatus(serde_json::Value),
+    EmbeddedBrowser,
     Shutdown,
 }
 #[derive(Clone)]

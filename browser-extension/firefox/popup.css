@@ -1,0 +1,6 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { width: 290px; margin: 0; padding: 18px; }
+h1 { font-size: 17px; margin: 0 0 14px; }
+p { font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+#website { font-weight: 600; }
+.hint { opacity: .72; margin-bottom: 0; }

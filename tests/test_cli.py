@@ -14,6 +14,28 @@ def test_settings_navigation_accepts_ring_context_and_old_tray_activation():
     assert activation_request(json.dumps(expected).encode() + b"\n") == expected
 
 
+@pytest.mark.parametrize("domain", ["example.com", "sub.example.com", "localhost", "xn--bcher-kva.example"])
+def test_settings_navigation_accepts_exact_website_ring_context(domain, monkeypatch):
+    expected = {"ring_layout": f"website:{domain}", "add_ring_action": True}
+    assert activation_request(json.dumps(expected).encode() + b"\n") == expected
+    calls = []
+    monkeypatch.setattr("mxcc.cli.configure", lambda **kwargs: calls.append(kwargs) or 0)
+    assert main(["configure", "--ring-layout", expected["ring_layout"], "--add-ring-action"]) == 0
+    assert calls == [expected]
+
+
+@pytest.mark.parametrize("identifier", [
+    "website:", "website:EXAMPLE.com", "website:example.com/path", "website:example.com:443",
+    "website:*.example.com", "website:example.com.", "website:../../escape", "website:example.com\n",
+])
+def test_settings_navigation_rejects_malformed_website_ring_ids(identifier, monkeypatch):
+    with pytest.raises(ValueError):
+        activation_request(json.dumps({"ring_layout": identifier, "add_ring_action": True}).encode())
+    monkeypatch.setattr("mxcc.cli.configure", lambda **kwargs: pytest.fail("Invalid context cannot launch settings"))
+    with pytest.raises(SystemExit):
+        main(["configure", "--ring-layout", identifier])
+
+
 @pytest.mark.parametrize("data", [
     {"ring_layout": "../../escape", "add_ring_action": True},
     {"ring_layout": None, "add_ring_action": True},

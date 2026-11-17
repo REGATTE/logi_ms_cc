@@ -16,7 +16,7 @@ from .paths import cache_dir, config_dir, runtime_path, socket_path
 SERVICE = "mx-creative-control.service"
 DEV_SERVICE = "mx-creative-control-dev.service"
 USER_UNIT = Path("/usr/lib/systemd/user") / SERVICE
-REQUIRED_CAPABILITY = "mx_master4_haptic_v1"
+REQUIRED_CAPABILITY = "embedded_browser_v1"
 # Only session/display locations needed by the worker and its settings launcher
 # cross into the transient service. Never copy the caller's entire environment.
 SESSION_ENVIRONMENT = (
@@ -100,18 +100,32 @@ def _start_managed_worker() -> str | None:
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"Could not inspect {DEV_SERVICE}: {error}") from error
     if existing.stdout.strip() == "loaded":
-        _run_managed(["systemctl", "--user", "start", DEV_SERVICE], DEV_SERVICE)
-    else:
-        command = [
-            "systemd-run", "--user", "--unit=mx-creative-control-dev", "--collect",
-            "--service-type=exec", "--property=Restart=on-failure", "--property=RestartSec=2",
-            "--property=PartOf=graphical-session.target",
-            "--expand-environment=no",
-        ]
-        command.extend(f"--setenv={name}={os.environ[name]}"
-                       for name in SESSION_ENVIRONMENT if name in os.environ)
-        command.extend(["--", *agent_arguments()])
-        _run_managed(command, DEV_SERVICE)
+        try:
+            _run_managed(["systemctl", "--user", "start", DEV_SERVICE], DEV_SERVICE)
+        except RuntimeError as error:
+            # An upgraded transient unit uses --collect and can disappear
+            # between the LoadState query and start. Recreate only that case;
+            # a real start failure must never launch a second worker.
+            try:
+                refreshed = subprocess.run(
+                    ["systemctl", "--user", "show", DEV_SERVICE, "--property=LoadState", "--value"],
+                    capture_output=True, text=True, timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                raise error
+            if refreshed.stdout.strip() != "not-found":
+                raise
+        else:
+            return DEV_SERVICE
+    command = [
+        "systemd-run", "--user", "--unit=mx-creative-control-dev", "--collect",
+        "--service-type=exec", "--property=Restart=on-failure", "--property=RestartSec=2",
+        "--property=PartOf=graphical-session.target",
+        "--expand-environment=no",
+    ]
+    command.extend(f"--setenv={name}={os.environ[name]}"
+                   for name in SESSION_ENVIRONMENT if name in os.environ)
+    command.extend(["--", *agent_arguments()])
+    _run_managed(command, DEV_SERVICE)
     return DEV_SERVICE
 
 
@@ -154,6 +168,21 @@ def _upgrade_worker() -> None:
     raise RuntimeError("The old worker did not stop. Quit it from the panel icon, then reopen settings.")
 
 
+def _wait_for_worker(process, diagnostic):
+    for _ in range(30):
+        try:
+            status = ipc.request("status", timeout=0.15)
+        except ipc.WorkerUnavailable:
+            if process is not None and process.poll() is not None:
+                raise RuntimeError(f"The worker exited. {diagnostic}")
+            time.sleep(0.1)
+            continue
+        if not _compatible(status):
+            raise RuntimeError(f"The started worker is incompatible. Install MX Creative Control {__version__} or rebuild its worker. {diagnostic}")
+        return status
+    return None
+
+
 def ensure_running() -> dict:
     running = None
     try:
@@ -175,17 +204,32 @@ def ensure_running() -> dict:
         diagnostic = f"See journalctl --user -u {unit} -n 60."
     else:
         process, diagnostic = _start_direct_worker()
-    for _ in range(30):
+    for attempt in range(2):
+        status = _wait_for_worker(process, diagnostic)
+        if status is not None:
+            return status
+        if attempt or unit != DEV_SERVICE:
+            break
+        # systemctl start can succeed against a transient unit that is being
+        # collected after upgrade, yet leave no running replacement. Recreate
+        # only after readiness times out and the unit is confirmed absent.
         try:
-            status = ipc.request("status", timeout=0.15)
-        except ipc.WorkerUnavailable:
-            if process is not None and process.poll() is not None:
-                raise RuntimeError(f"The worker exited. {diagnostic}")
-            time.sleep(0.1)
-            continue
-        if not _compatible(status):
-            raise RuntimeError(f"The started worker is incompatible. Install MX Creative Control {__version__} or rebuild its worker. {diagnostic}")
-        return status
+            refreshed = subprocess.run(
+                ["systemctl", "--user", "show", DEV_SERVICE, "--property=LoadState", "--value"],
+                capture_output=True, text=True, timeout=3)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"The worker did not become ready; could not inspect {DEV_SERVICE}: {error}. {diagnostic}") from error
+        if refreshed.returncode not in (0, 4):
+            detail = refreshed.stderr.strip() or f"systemctl exited with status {refreshed.returncode}"
+            raise RuntimeError(f"The worker did not become ready; could not inspect {DEV_SERVICE}: {detail}. {diagnostic}")
+        if refreshed.stdout.strip() != "not-found":
+            break
+        # Recheck through the normal path to reuse any concurrently started
+        # unit. Never fall back to a direct worker after a managed start.
+        unit = _start_managed_worker()
+        if unit is None:
+            raise RuntimeError(f"The worker did not become ready; the user service manager is no longer available. {diagnostic}")
+        diagnostic = f"See journalctl --user -u {unit} -n 60."
     raise RuntimeError(f"The worker did not become ready. {diagnostic}")
 
 

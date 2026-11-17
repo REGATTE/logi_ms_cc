@@ -1,6 +1,8 @@
 mod activation;
 mod device_buttons;
 mod dialpad_buttons;
+mod dialpad_dial;
+mod embedded_browser;
 mod events;
 mod focus;
 mod hardware;
@@ -16,6 +18,7 @@ use mx_creative_worker::{
     protocol::Press,
 };
 use std::{
+    collections::VecDeque,
     env,
     io::{self, Read},
     os::{fd::AsRawFd, unix::net::UnixStream},
@@ -107,6 +110,7 @@ fn action(action: &Action, keyboard: &mut Option<Keyboard>) -> Result<(), String
         Action::Launch { .. } | Action::OpenRing {} => {
             Err("Launcher actions require desktop activation".into())
         }
+        Action::DialShortcut { .. } => Err("Dial shortcuts require a signed dial event".into()),
         Action::None {} => Ok(()),
         Action::Shortcut { .. } | Action::Screenshot {} => {
             let keys = if let Action::Shortcut { keys } = action {
@@ -188,7 +192,7 @@ fn trigger_action(
 ) -> Result<bool, String> {
     if matches!(action_value, Action::OpenRing {}) {
         let result = ring.toggle(
-            &state.config.action_ring,
+            state,
             gui,
             sender,
             &state.status.session,
@@ -222,6 +226,79 @@ fn refresh_focus(state: &mut State) -> bool {
     }
 }
 
+fn sync_dial_capture(
+    state: &State,
+    ring: &ring::Ring,
+    handle: &Option<dialpad_dial::Handle>,
+    capture: &mut Option<mx_creative_worker::dial::Capture>,
+    generation: &mut u64,
+    rotations: &mut VecDeque<dialpad_dial::Rotation>,
+) {
+    let next = if ring.is_open() {
+        None
+    } else {
+        state.dial_capture(Instant::now())
+    };
+    if *capture != next {
+        *capture = next;
+        *generation = generation.wrapping_add(1);
+        rotations.clear();
+        if let Some(handle) = handle {
+            handle.update(capture.is_some(), *generation);
+        }
+    }
+}
+
+type EmbeddedTargetKey = (Foreground, Vec<String>, bool);
+
+fn sync_embedded_target(
+    state: &mut State,
+    ring: &ring::Ring,
+    helper: &Option<embedded_browser::Handle>,
+    previous: &mut Option<EmbeddedTargetKey>,
+    target: &mut mx_creative_worker::embedded::Target,
+) {
+    let Some(helper) = helper else {
+        return;
+    };
+    let mut domains: Vec<_> = state
+        .config
+        .website_profiles
+        .iter()
+        .map(|profile| profile.domain.clone())
+        .collect();
+    domains.sort();
+    let key = (state.foreground().clone(), domains, ring.is_open());
+    if previous.as_ref() == Some(&key) {
+        return;
+    }
+    let active = mx_creative_worker::embedded::is_chatgpt(&key.0) && !key.1.is_empty() && !key.2;
+    let pid = if active {
+        focus::window_pid(key.0.window).unwrap_or(0)
+    } else {
+        0
+    };
+    let next = mx_creative_worker::embedded::Target {
+        window: if active && pid != 0 { key.0.window } else { 0 },
+        pid,
+        domains: if active && pid != 0 {
+            key.1.clone()
+        } else {
+            Vec::new()
+        },
+        target_revision: target.target_revision,
+    };
+    if *target == next {
+        *previous = Some(key);
+        return;
+    }
+    *target = next;
+    target.target_revision = target.target_revision.wrapping_add(1);
+    state.embedded_target(target.clone(), Instant::now());
+    helper.target(target.clone());
+    *previous = Some(key);
+}
+
 fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load(&options.config)?;
     if options.check {
@@ -250,7 +327,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let buttons = if session == "x11" {
         Some(device_buttons::start(
             sender.clone(),
-            state.config.configured_bindings(),
+            state.configured_bindings(),
         ))
     } else {
         None
@@ -258,7 +335,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let dialpad = if session == "x11" {
         Some(dialpad_buttons::start(
             sender.clone(),
-            state.config.configured_bindings(),
+            state.configured_bindings(),
             dialpad_buttons::Target::Dialpad,
         ))
     } else {
@@ -267,12 +344,14 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let master4 = if session == "x11" {
         Some(dialpad_buttons::start(
             sender.clone(),
-            state.config.configured_bindings(),
+            state.configured_bindings(),
             dialpad_buttons::Target::Master4,
         ))
     } else {
         None
     };
+    let main_dial = (session == "x11").then(|| dialpad_dial::start(sender.clone()));
+    let embedded_browser = (session == "x11").then(|| embedded_browser::start(sender.clone()));
     if session == "x11" {
         focus::start(sender.clone());
     }
@@ -299,9 +378,19 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut redraw = true;
     let mut quit = false;
     let mut tray_state = None;
+    let mut captured = (state.configured_bindings(), state.status.paused);
+    let mut dial_capture = None;
+    let mut dial_generation = 0;
+    let mut rotations = VecDeque::new();
+    let mut next_dial_step = Instant::now();
+    let mut embedded_target = mx_creative_worker::embedded::Target::default();
+    let mut embedded_target_key = None;
     while !quit {
         redraw |= state.tick(Instant::now());
         if ring.tick() {
+            redraw |= refresh_focus(&mut state);
+        }
+        if ring.invalidate_website(&state) {
             redraw |= refresh_focus(&mut state);
         }
         state.status.ring_open = ring.is_open();
@@ -360,6 +449,21 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok(event) = rx.try_recv() {
+            sync_embedded_target(
+                &mut state,
+                &ring,
+                &embedded_browser,
+                &mut embedded_target_key,
+                &mut embedded_target,
+            );
+            sync_dial_capture(
+                &state,
+                &ring,
+                &main_dial,
+                &mut dial_capture,
+                &mut dial_generation,
+                &mut rotations,
+            );
             match event {
                 Event::Request(request, reply, written) => {
                     let mut ending_ring = None;
@@ -367,6 +471,39 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         Request::Status {} => {
                             let _ = reply.send(serde_json::to_value(&state.status)?);
                             continue;
+                        }
+                        Request::BrowserContext(report) => {
+                            let foreground = focus::current().map(|current| {
+                                if focus::is_ring(&current) {
+                                    ring.browser_origin().cloned().unwrap_or(current)
+                                } else {
+                                    current
+                                }
+                            });
+                            match foreground {
+                                Ok(foreground) => {
+                                    let result =
+                                        state.browser_context(&report, foreground, Instant::now());
+                                    if ring.invalidate_website(&state) {
+                                        redraw |= refresh_focus(&mut state);
+                                    }
+                                    state.status.ring_open = ring.is_open();
+                                    result
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        Request::BrowserDisconnect {
+                            browser,
+                            session: source,
+                        } => {
+                            let result =
+                                state.browser_disconnect(&browser, &source, Instant::now());
+                            if ring.invalidate_website(&state) {
+                                redraw |= refresh_focus(&mut state);
+                            }
+                            state.status.ring_open = ring.is_open();
+                            result
                         }
                         Request::RingContext {} => {
                             let response = ring.context().unwrap_or_else(
@@ -377,7 +514,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Request::RingToggle {} => {
                             let response = match ring.toggle(
-                                &state.config.action_ring,
+                                &state,
                                 &options.gui,
                                 &sender,
                                 session,
@@ -417,6 +554,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                                     if state.status.paused {
                                         return Err("Device actions are paused".into());
                                     }
+                                    session.validate_website(&state)?;
                                     let selected = session.action(slot)?;
                                     if matches!(
                                         selected,
@@ -445,24 +583,6 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                             Ok(config) => {
                                 ring.close();
                                 state.reload(config);
-                                if let Some(master4) = &master4 {
-                                    master4.update(
-                                        state.config.configured_bindings(),
-                                        state.status.paused,
-                                    );
-                                }
-                                if let Some(dialpad) = &dialpad {
-                                    dialpad.update(
-                                        state.config.configured_bindings(),
-                                        state.status.paused,
-                                    );
-                                }
-                                if let Some(buttons) = &buttons {
-                                    buttons.update(
-                                        state.config.configured_bindings(),
-                                        state.status.paused,
-                                    );
-                                }
                                 state.status.last_error = None;
                                 redraw = true;
                                 if let Some(k) = keypad.as_mut() {
@@ -477,15 +597,6 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                             state.status.paused = value;
                             if value {
                                 ring.close();
-                            }
-                            if let Some(master4) = &master4 {
-                                master4.update(state.config.configured_bindings(), value);
-                            }
-                            if let Some(dialpad) = &dialpad {
-                                dialpad.update(state.config.configured_bindings(), value);
-                            }
-                            if let Some(buttons) = &buttons {
-                                buttons.update(state.config.configured_bindings(), value);
                             }
                             Ok(())
                         }
@@ -517,8 +628,18 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     state.status.ring_open = ring.is_open();
                 }
                 Event::Focus(foreground) => {
-                    if !focus::is_ring(&foreground) && !ring.is_open() {
-                        redraw |= state.focus_changed(foreground, Instant::now());
+                    // Also refresh _NET_WM_PID when a window's owner property changes.
+                    embedded_target_key = None;
+                    if !focus::is_ring(&foreground) {
+                        if ring
+                            .browser_origin()
+                            .is_some_and(|origin| origin.window != foreground.window)
+                        {
+                            ring.close();
+                        }
+                        if !ring.is_open() {
+                            redraw |= state.focus_changed(foreground, Instant::now());
+                        }
                     }
                 }
                 Event::FocusSupport(value) => redraw |= state.set_focus_supported(value),
@@ -532,17 +653,10 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     if value {
                         ring.close();
                     }
-                    if let Some(master4) = &master4 {
-                        master4.update(state.config.configured_bindings(), value);
-                    }
-                    if let Some(dialpad) = &dialpad {
-                        dialpad.update(state.config.configured_bindings(), value);
-                    }
-                    if let Some(buttons) = &buttons {
-                        buttons.update(state.config.configured_bindings(), value);
-                    }
                 }
                 Event::DeviceButton(binding) => {
+                    redraw |= refresh_focus(&mut state);
+                    state.tick(Instant::now());
                     let Some(action_value) = state.device_action(&binding) else {
                         continue;
                     };
@@ -562,6 +676,11 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         Err(error) => state.status.last_error = Some(error),
                     }
                 }
+                Event::DeviceRotate(rotation) => {
+                    if rotation.generation == dial_generation && dial_capture.is_some() {
+                        rotations.push_back(rotation);
+                    }
+                }
                 Event::RingExited(token, error) => {
                     if ring.exited(&token) {
                         state.status.ring_error = error;
@@ -571,12 +690,120 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::DeviceButtonsStatus(status) => state.status.device_buttons = status,
                 Event::DialpadButtonsStatus(status) => state.status.dialpad_buttons = status,
+                Event::DialpadDialStatus(status) => state.status.dialpad_dial = status,
                 Event::Master4ButtonsStatus(status) => state.status.mx_master4_buttons = status,
+                Event::EmbeddedBrowser => {
+                    if let Some(observation) =
+                        embedded_browser.as_ref().and_then(|helper| helper.take())
+                    {
+                        let foreground = focus::current().unwrap_or_default();
+                        let pid = if mx_creative_worker::embedded::is_chatgpt(&foreground) {
+                            focus::window_pid(foreground.window).unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        if !focus::is_ring(&foreground) {
+                            redraw |= state.focus_changed(foreground.clone(), Instant::now());
+                        }
+                        let active = mx_creative_worker::embedded::is_chatgpt(&foreground)
+                            && !ring.is_open()
+                            && !state.config.website_profiles.is_empty();
+                        if active
+                            && (pid != embedded_target.pid
+                                || foreground.window != embedded_target.window)
+                            || !active && embedded_target.window != 0
+                        {
+                            embedded_target_key = None;
+                        }
+                        if let Err(error) =
+                            state.embedded_report(observation, &foreground, pid, Instant::now())
+                        {
+                            state.status.last_error = Some(error);
+                        }
+                        if ring.invalidate_website(&state) {
+                            redraw |= refresh_focus(&mut state);
+                        }
+                    }
+                }
                 Event::Shutdown => quit = true,
             }
         }
         if quit {
             break;
+        }
+        sync_embedded_target(
+            &mut state,
+            &ring,
+            &embedded_browser,
+            &mut embedded_target_key,
+            &mut embedded_target,
+        );
+        sync_dial_capture(
+            &state,
+            &ring,
+            &main_dial,
+            &mut dial_capture,
+            &mut dial_generation,
+            &mut rotations,
+        );
+        // Pace complete key taps so the website renders each frame before the next
+        // step. IPC/focus updates are drained first, and every individual step gets
+        // a fresh foreground/context check; no sleeps block the worker loop.
+        if Instant::now() >= next_dial_step {
+            if let Some(mut rotation) = rotations.pop_front() {
+                let actual = focus::current().ok();
+                if let Some(foreground) = actual.as_ref().filter(|value| !focus::is_ring(value)) {
+                    redraw |= state.focus_changed(foreground.clone(), Instant::now());
+                }
+                state.tick(Instant::now());
+                let current = state.dial_capture(Instant::now());
+                let owner_matches = dial_capture
+                    .as_ref()
+                    .and_then(|capture| capture.website.as_ref())
+                    .filter(|snapshot| snapshot.source == "chatgpt")
+                    .is_none_or(|snapshot| {
+                        snapshot.matches_process(focus::window_pid(snapshot.window).unwrap_or(0))
+                    });
+                if let Some(capture) = dial_capture.as_ref().filter(|capture| {
+                    rotation.generation == dial_generation
+                        && actual.as_ref() == Some(&capture.foreground)
+                        && owner_matches
+                        && capture.current(current.as_ref(), rotation.captured, Instant::now())
+                }) {
+                    if let Some(keys) = capture.keys(rotation.delta) {
+                        match action(&Action::Shortcut { keys: keys.into() }, &mut keyboard) {
+                            Ok(()) => state.status.last_error = None,
+                            Err(error) => state.status.last_error = Some(error),
+                        }
+                        rotation.delta -= rotation.delta.signum();
+                        if rotation.delta != 0 {
+                            rotations.push_front(rotation);
+                        }
+                        next_dial_step = Instant::now() + Duration::from_millis(20);
+                    }
+                }
+            }
+        }
+        sync_dial_capture(
+            &state,
+            &ring,
+            &main_dial,
+            &mut dial_capture,
+            &mut dial_generation,
+            &mut rotations,
+        );
+        let next_capture = (state.configured_bindings(), state.status.paused);
+        if captured != next_capture {
+            if let Some(master4) = &master4 {
+                master4.update(next_capture.0.clone(), next_capture.1);
+            }
+            if let Some(dialpad) = &dialpad {
+                dialpad.update(next_capture.0.clone(), next_capture.1);
+            }
+            if let Some(buttons) = &buttons {
+                buttons.update(next_capture.0.clone(), next_capture.1);
+            }
+            captured = next_capture;
         }
         if let Some(k) = keypad.as_mut() {
             for press in std::mem::take(&mut k.pending) {
@@ -654,7 +881,13 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 };
             }
         }
-        if let Some(deadline) = state.deadline().into_iter().chain(ring.deadline()).min() {
+        if let Some(deadline) = state
+            .deadline()
+            .into_iter()
+            .chain(ring.deadline())
+            .chain((!rotations.is_empty()).then_some(next_dial_step))
+            .min()
+        {
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -703,6 +936,8 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     drop(buttons);
     drop(dialpad);
     drop(master4);
+    drop(main_dial);
+    drop(embedded_browser);
     if let Some(k) = keypad.as_mut() {
         k.restore();
     }
@@ -720,5 +955,70 @@ fn main() {
     {
         eprintln!("mx-creative-worker: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod dial_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn pause_and_resume_advance_generation_even_when_the_action_returns_unchanged() {
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "version":1,"auto_switch":true,"profiles":[],
+            "pages":[{"name":"Apps","keys":[null,null,null,null,null,null,null,null,null]},
+                     {"name":"Shortcuts","keys":[null,null,null,null,null,null,null,null,null]}],
+            "device_actions":[{"vendor_id":1133,"product_id":48128,"control_id":"dial:main",
+                "action":{"type":"dial_shortcut","clockwise":"Right","counterclockwise":"Left"}}]
+        }))
+        .unwrap();
+        let mut state = State::new(config, "x11".into());
+        state.focus_changed(
+            Foreground {
+                window: 12,
+                name: "Firefox".into(),
+                identities: vec!["firefox".into()],
+            },
+            Instant::now(),
+        );
+        let ring = ring::Ring::default();
+        let mut capture = None;
+        let mut generation = 0;
+        let mut pending = VecDeque::new();
+        sync_dial_capture(
+            &state,
+            &ring,
+            &None,
+            &mut capture,
+            &mut generation,
+            &mut pending,
+        );
+        let original = capture.clone();
+        assert_eq!(generation, 1);
+        state.status.paused = true;
+        sync_dial_capture(
+            &state,
+            &ring,
+            &None,
+            &mut capture,
+            &mut generation,
+            &mut pending,
+        );
+        assert!(capture.is_none());
+        assert_eq!(generation, 2);
+        state.status.paused = false;
+        sync_dial_capture(
+            &state,
+            &ring,
+            &None,
+            &mut capture,
+            &mut generation,
+            &mut pending,
+        );
+        assert_eq!(capture, original);
+        assert_eq!(
+            generation, 3,
+            "a queued generation-1 rotation must not survive pause/resume"
+        );
     }
 }

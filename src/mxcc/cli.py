@@ -11,6 +11,7 @@ from . import __version__
 def activation_request(raw: bytes) -> dict:
     """Bounded single-instance navigation protocol, also accepting old tray opens."""
     from .profiles import DESKTOP_PATTERN
+    from .website_profiles import domain_from_layout_id
     if len(raw) > 4096:
         raise ValueError("Settings request is too large")
     if raw.strip() == b"activate":
@@ -20,7 +21,8 @@ def activation_request(raw: bytes) -> dict:
         raise ValueError("Invalid settings request")
     identifier = data["ring_layout"]
     if identifier is not None and (not isinstance(identifier, str) or
-                                   identifier != "default" and not DESKTOP_PATTERN.fullmatch(identifier)):
+                                   identifier != "default" and not DESKTOP_PATTERN.fullmatch(identifier)
+                                   and domain_from_layout_id(identifier) is None):
         raise ValueError("Invalid ring application ID")
     if type(data["add_ring_action"]) is not bool or data["add_ring_action"] and identifier is None:
         raise ValueError("Add action requires a ring layout")

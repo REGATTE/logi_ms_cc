@@ -160,6 +160,60 @@ use bundled official product artwork; verified image coordinates keep dialpad
 controls and the G402 side buttons selectable after scaling and letterboxing.
 Unknown models retain the generic illustration and never inherit a G402 photo.
 
+## Website frame dial — 2026-11-16
+
+On this X11 workstation, the Bluetooth MX Dialpad (`046d:bc00`) exposes
+MultiRoller `0x4610` at the dynamically discovered feature index 13. Read-only
+queries reported large dial control 1 with 180 increments per revolution;
+small roller control 0 and the large dial both started in native mode 0.
+
+The Firefox profile for `10.64.192.14` assigns clockwise to Right and
+counterclockwise to Left. The recording viewer's keys were checked against
+its displayed frame counter. During the physical test, the user confirmed
+forward/backward frame movement and unchanged small-roller behavior.
+The observer recorded 202 signed dial reports, 210 Right taps and 63 Left taps,
+with no native scroll events during diversion. Fast movement is deliberately
+bounded and paced; these counts do not imply every fast increment is retained.
+
+Live mode replies confirmed mode 1 only during the matching website context,
+then mode 0 after focus left Firefox. A final read-only query confirmed both
+rollers at mode 0. Existing bracket-button assignments and the MX Master 4
+haptic mapping remained active. No annotation ranges or submissions were changed.
+Local evidence is in `build/dial-video/live-check.json` and
+`build/dial-video/protocol-readonly.json`.
+
+Automated validation passed 558 Python tests and 90 Rust tests, followed by
+35 service tests covering the transient-unit restart race found during upgrade.
+The Rust tests include signed
+rotation parsing, bounded queues, focus/site/action invalidation, exact action
+target validation, and fake HID++ rollback/disconnect recovery. The two-direction
+editor was inspected offscreen at 1200×820 and 970×710.
+
+## ChatGPT embedded-browser dial — 2026-11-16
+
+The focused-document accessibility check distinguished the embedded recording
+viewer (`10.64.192.14`) from ChatGPT's native/chat controls (`app:` documents).
+No browser profile files, page text, input contents or hidden document URLs were
+read. Standard accessibility metadata queries enabled Chromium's lazy web tree;
+no browser flags or preferences were changed.
+
+The updated worker reported `website_source: chatgpt` while the viewer had
+focus. The user confirmed that the video dial worked. The observer recorded
+48 signed dial reports, 34 Right taps and 29 Left taps. Returning to chat cleared
+the website profile and released the dial; a final read-only hardware query
+confirmed both rollers at native mode 0. Evidence is saved locally in
+`build/embedded-browser/live-check.json`.
+
+Validation passed 607 Python tests, 100 Rust tests, Rust formatting and clippy
+(allowing only the pre-existing `chunks_exact_to_as_chunks` lint), and Debian
+package checks. The later website-ring guidance passed 17 targeted UI tests.
+The package includes system GI/AT-SPI dependencies and verifies the required
+metadata API without starting an accessibility connection. Live helper checks
+confirmed periodic reports and clean shutdown; per-object cache invalidation
+avoids a global-cache mode that stalled this workstation's AT-SPI dispatch.
+Website-specific Action Rings remain Firefox-only; ChatGPT retains normal
+application/default rings and supports website control shortcuts.
+
 ## Resource sample
 
 With the settings process closed, the previously sampled worker used **5,604 KiB RSS (5.47 MiB)**, with eight threads and no Qt library loaded. A 15-second idle sample accumulated zero CPU ticks, reported as **0.0% of one core**. This sample was taken before the 0.2.0 UI refinements; it is not a maximum or a promise of zero CPU during key presses, icon uploads or window changes. The GUI's Qt runtime uses additional memory only while settings is open.

@@ -15,7 +15,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "mx-creative-control"
 DEPENDENCIES = (
-    "python3 (>= 3.12), libc6 (>= 2.39), libstdc++6, libgcc-s1, "
+    "python3 (>= 3.12), python3-gi, gir1.2-atspi-2.0, libc6 (>= 2.39), libstdc++6, libgcc-s1, "
     "libdbus-1-3, libudev1, libglib2.0-0t64, libgl1, libegl1, libopengl0, "
     "libfontconfig1, libfreetype6, libx11-6, libx11-xcb1, libxcb1, "
     "libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, "
@@ -113,6 +113,7 @@ def main() -> None:
     for metadata in runtime_metadata:
         copy_tree(metadata, private / metadata.name)
     copy_tree(ROOT / "src/mxcc", private / "mxcc")
+    copy_tree(ROOT / "browser-extension/firefox", stage / "usr/share" / PACKAGE / "browser-extension/firefox")
     copy_tree(ROOT / "shortcuts/config", stage / "usr/share" / PACKAGE / "shortcuts/config")
     assets = (
         ("mx-creative-control", "/usr/bin/mx-creative-control", 0o755),
@@ -128,7 +129,7 @@ def main() -> None:
     for source, target, mode in assets:
         copy_file(ROOT / "packaging" / source, stage, target, mode)
     copy_file(worker, stage, "/usr/lib/mx-creative-control/mxcc-worker", 0o755)
-    for document in ("README.md", "docs/INSTALL.md", "docs/PROFILES.md", "docs/ACTION-RING.md", "docs/VALIDATION.md", "docs/UI-REFERENCES.md", "LICENSE", "worker/THIRD_PARTY.md"):
+    for document in ("README.md", "docs/INSTALL.md", "docs/PROFILES.md", "docs/ACTION-RING.md", "docs/WEBSITE-SHORTCUTS.md", "docs/VALIDATION.md", "docs/UI-REFERENCES.md", "LICENSE", "worker/THIRD_PARTY.md"):
         if (ROOT / document).is_file():
             copy_file(ROOT / document, stage, f"/usr/share/doc/{PACKAGE}/{Path(document).name}")
     if (ROOT / "worker/licenses").is_dir():

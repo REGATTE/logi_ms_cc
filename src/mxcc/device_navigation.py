@@ -336,6 +336,8 @@ class DeviceDetails(QWidget):
         elif not supported:
             message = ("Custom actions for this MX Master 4 button are not supported yet."
                        if self._device.product_id == 0xb042 and identifier == "hidpp:196" else
+                       "Open Website shortcuts to assign clockwise and counterclockwise shortcuts to the large dial."
+                       if self._device.product_id == 0xbc00 and identifier == "dial:main" else
                        "Dial and roller movement mappings are not available yet."
                        if self.controls[identifier].kind in ("dial", "wheel", "scroll", "axis")
                        else "Mapping actions for this control are not available yet.")

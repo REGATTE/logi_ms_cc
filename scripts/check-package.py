@@ -2,6 +2,7 @@
 """Check a built .deb and smoke-test its Qt runtime without installing it."""
 import argparse
 import ast
+from email.parser import Parser
 import os
 from pathlib import Path
 import subprocess
@@ -42,6 +43,13 @@ required = {
     "./usr/lib/mx-creative-control/python/mxcc/action_ring.py",
     "./usr/lib/mx-creative-control/python/mxcc/ring_editor.py",
     "./usr/lib/mx-creative-control/python/mxcc/ring_configuration.py",
+    "./usr/lib/mx-creative-control/python/mxcc/website_profiles.py",
+    "./usr/lib/mx-creative-control/python/mxcc/website_editor.py",
+    "./usr/lib/mx-creative-control/python/mxcc/browser_bridge.py",
+    "./usr/lib/mx-creative-control/python/mxcc/browser_setup.py",
+    "./usr/lib/mx-creative-control/python/mxcc/embedded_browser.py",
+    "./usr/share/mx-creative-control/browser-extension/firefox/manifest.json",
+    "./usr/share/mx-creative-control/browser-extension/firefox/background.js",
     "./usr/lib/udev/rules.d/70-mx-creative-control.rules",
     "./usr/lib/systemd/user/mx-creative-control.service",
     "./usr/share/polkit-1/actions/org.mxcreativecontrol.setup-permissions.policy",
@@ -68,6 +76,10 @@ with tempfile.TemporaryDirectory(prefix="mxcc-package-check-") as directory:
     root = Path(directory)
     subprocess.run(["dpkg-deb", "--extract", str(package), directory], check=True)
     subprocess.run(["dpkg-deb", "--control", str(package), str(root / "control")], check=True)
+    control = Parser().parsestr((root / "control/control").read_text())
+    dependencies = {item.strip().split()[0] for item in control.get("Depends", "").split(",") if item.strip()}
+    if not {"python3-gi", "gir1.2-atspi-2.0"} <= dependencies:
+        raise SystemExit("Embedded browser support requires python3-gi and gir1.2-atspi-2.0 package dependencies")
     policy = ET.parse(root / "usr/share/polkit-1/actions/org.mxcreativecontrol.setup-permissions.policy")
     if policy.find('.//annotate[@key="org.freedesktop.policykit.exec.path"]').text != "/usr/lib/mx-creative-control/setup-permissions":
         raise SystemExit("Policy does not match the packaged helper")
@@ -84,6 +96,11 @@ import json
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
+import gi
+gi.require_version('Atspi', '2.0')
+from gi.repository import Atspi
+assert Atspi.Role.DOCUMENT_WEB is not None
+assert callable(Atspi.Accessible.clear_cache_single)
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, qVersion
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QImage, QPalette
 from PySide6.QtNetwork import QLocalServer

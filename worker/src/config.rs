@@ -12,6 +12,31 @@ pub struct Config {
     pub action_ring: ActionRing,
     #[serde(default)]
     pub device_actions: Vec<DeviceAction>,
+    #[serde(default)]
+    pub website_profiles: Vec<WebsiteProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebsiteProfile {
+    pub domain: String,
+    pub device_actions: Vec<DeviceAction>,
+    pub ring: Option<RingLayout>,
+}
+
+/// Canonical exact hostnames only: no URLs, ports, wildcards or suffix matching.
+pub fn valid_domain(domain: &str) -> bool {
+    !domain.is_empty()
+        && domain.len() <= 253
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,6 +66,10 @@ pub enum Action {
     },
     Shortcut {
         keys: String,
+    },
+    DialShortcut {
+        clockwise: String,
+        counterclockwise: String,
     },
     Screenshot {},
     OpenRing {},
@@ -135,7 +164,41 @@ impl Config {
                     "remove an assignment instead of assigning an empty device action".into(),
                 );
             }
-            mapping.action.validate()?;
+            mapping.validate()?;
+        }
+        if self.website_profiles.len() > 128 {
+            return Err("at most 128 website profiles are supported".into());
+        }
+        let mut domains = HashSet::new();
+        for profile in &self.website_profiles {
+            if !valid_domain(&profile.domain) || !domains.insert(&profile.domain) {
+                return Err("website profiles require unique canonical hostnames".into());
+            }
+            if profile.device_actions.len() > 256 {
+                return Err("at most 256 website button assignments are supported".into());
+            }
+            let mut targets = HashSet::new();
+            for mapping in &profile.device_actions {
+                let binding = mapping.binding();
+                if !binding.supported()
+                    || !targets.insert(binding)
+                    || matches!(mapping.action, Action::None {})
+                {
+                    return Err("unsupported or duplicate website button assignment".into());
+                }
+                mapping.validate()?;
+            }
+            if let Some(layout) = &profile.ring {
+                if layout.id != format!("website:{}", profile.domain)
+                    || !layout.wm_classes.is_empty()
+                {
+                    return Err(
+                        "website rings must identify their exact domain without window classes"
+                            .into(),
+                    );
+                }
+                layout.validate_slots()?;
+            }
         }
         Ok(())
     }
@@ -176,6 +239,17 @@ impl Config {
                     .iter()
                     .flat_map(|layout| layout.slots.iter().flatten().map(|slot| &slot.action)),
             )
+            .chain(self.website_profiles.iter().flat_map(|profile| {
+                profile
+                    .device_actions
+                    .iter()
+                    .map(|mapping| &mapping.action)
+                    .chain(
+                        profile.ring.iter().flat_map(|layout| {
+                            layout.slots.iter().flatten().map(|slot| &slot.action)
+                        }),
+                    )
+            }))
     }
 }
 
@@ -190,6 +264,9 @@ impl Page {
                 || !key.image.to_ascii_lowercase().ends_with(".jpg")
             {
                 return Err("invalid key label or JPEG filename".into());
+            }
+            if matches!(key.action, Action::DialShortcut { .. }) {
+                return Err("dial shortcuts require a large dial assignment".into());
             }
             key.action.validate()?;
         }
@@ -221,6 +298,13 @@ impl Action {
             }
             Action::Shortcut { keys } => {
                 crate::input::parse_chord(keys)?;
+            }
+            Action::DialShortcut {
+                clockwise,
+                counterclockwise,
+            } => {
+                crate::input::parse_chord(clockwise)?;
+                crate::input::parse_chord(counterclockwise)?;
             }
             _ => {}
         }
@@ -273,6 +357,18 @@ pub struct DeviceBinding {
 }
 
 impl DeviceBinding {
+    pub fn main_dial() -> Self {
+        Self {
+            vendor_id: 0x046d,
+            product_id: 0xbc00,
+            control_id: "dial:main".into(),
+        }
+    }
+
+    pub fn is_main_dial(&self) -> bool {
+        self.vendor_id == 0x046d && self.product_id == 0xbc00 && self.control_id == "dial:main"
+    }
+
     /// Only identities already understood by the XInput or HID++ backend.
     pub fn supported(&self) -> bool {
         if self.vendor_id != 0x046d || self.product_id == 0 {
@@ -285,7 +381,7 @@ impl DeviceBinding {
             0xc07e => matches!(self.control_id.as_str(), "button:4" | "button:5"),
             0xbc00 => matches!(
                 self.control_id.as_str(),
-                "button:1" | "button:2" | "button:3" | "button:4"
+                "button:1" | "button:2" | "button:3" | "button:4" | "dial:main"
             ),
             _ => matches!(
                 self.control_id.as_str(),
@@ -305,6 +401,13 @@ pub struct DeviceAction {
 }
 
 impl DeviceAction {
+    fn validate(&self) -> Result<(), String> {
+        if self.binding().is_main_dial() != matches!(self.action, Action::DialShortcut { .. }) {
+            return Err("large dial assignments require clockwise and counterclockwise shortcuts; dial shortcuts cannot be assigned to buttons".into());
+        }
+        self.action.validate()
+    }
+
     pub fn binding(&self) -> DeviceBinding {
         DeviceBinding {
             vendor_id: self.vendor_id,
@@ -327,31 +430,15 @@ impl ActionRing {
             {
                 return Err("ring layouts need unique desktop IDs".into());
             }
-            if layout.slots.len() > 7 || layout.slots.iter().any(Option::is_none) {
-                return Err("Action Ring supports up to seven configured actions without empty slots. Open settings to update this saved runtime layout.".into());
-            }
-            validate_classes(&layout.wm_classes)?;
-            for slot in layout.slots.iter().flatten() {
-                if slot.label.is_empty()
-                    || slot.label.len() > 256
-                    || slot.label.chars().any(char::is_control)
-                    || slot.icon.len() > 4096
-                    || slot.icon.chars().any(char::is_control)
-                {
-                    return Err("invalid ring label or icon".into());
-                }
-                if matches!(slot.action, Action::OpenRing {}) {
-                    return Err("a ring cannot open another ring".into());
-                }
-                slot.action.validate()?;
-            }
+            layout.validate_slots()?;
         }
         if !self.layouts.is_empty() && !ids.contains(&"default".to_string()) {
             return Err("ring layouts need a default layout".into());
         }
         let mut bindings = HashSet::new();
         for binding in &self.bindings {
-            if binding.vendor_id != 0x046d
+            if binding.is_main_dial()
+                || binding.vendor_id != 0x046d
                 || binding.product_id == 0
                 || binding.control_id.len() > 64
                 || binding.control_id.is_empty()
@@ -363,6 +450,33 @@ impl ActionRing {
             {
                 return Err("invalid or duplicate Logitech ring binding".into());
             }
+        }
+        Ok(())
+    }
+}
+
+impl RingLayout {
+    fn validate_slots(&self) -> Result<(), String> {
+        if self.slots.len() > 7 || self.slots.iter().any(Option::is_none) {
+            return Err("Action Ring supports up to seven configured actions without empty slots. Open settings to update this saved runtime layout.".into());
+        }
+        validate_classes(&self.wm_classes)?;
+        for slot in self.slots.iter().flatten() {
+            if slot.label.is_empty()
+                || slot.label.len() > 256
+                || slot.label.chars().any(char::is_control)
+                || slot.icon.len() > 4096
+                || slot.icon.chars().any(char::is_control)
+            {
+                return Err("invalid ring label or icon".into());
+            }
+            if matches!(
+                slot.action,
+                Action::OpenRing {} | Action::DialShortcut { .. }
+            ) {
+                return Err("ring slots cannot open another ring or assign a dial".into());
+            }
+            slot.action.validate()?;
         }
         Ok(())
     }

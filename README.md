@@ -14,9 +14,10 @@ This is an independent community project, not Logitech's Logi Options+ software.
 - **Consistent device editors:** the keypad, dialpad, mouse and newly discovered devices use the Action Ring editor's wide preview, application scope and rounded right-hand panel. Search keypad actions or device controls; selecting an illustrated control highlights its matching row. Connection details expand beneath the device.
 - **Action Ring:** up to seven configurable actions around the cursor, plus a separate **+** button fixed at the bottom that opens the editor. The compact ring blooms from the cursor in 220 ms; hovering enlarges an option by 30%. Use default or application-specific layouts, original app icons, launch/focus, shortcuts and screenshots. Drag to reorder and import/export JSON. The native Qt popup exits after use.
 - **Shared action picker:** keypad keys and supported device buttons offer **Open application**, **Keyboard shortcut**, and **System** categories. Applications focus an existing window or launch; System offers Screenshot and Open Action Ring. Apply saves the selected action; Remove clears it. The same categories edit individual keys in application shortcut pages.
-- **Device control discovery:** the dialpad shows four buttons, one **Dial** mapping and one **Roller** mapping; G402 offers only its **Back** and **Forward** buttons. Those buttons can launch/focus apps, send shortcuts, take screenshots or open the ring on X11. Other models automatically list Ubuntu-reported controls; recognized standard mouse buttons use the same backend. Wheel, dial and unsupported control mappings remain unavailable, with an explanation in the picker.
+- **Device control discovery:** the dialpad shows four buttons, one **Dial** mapping and one **Roller** mapping; G402 offers only its **Back** and **Forward** buttons. Those buttons can launch/focus apps, send shortcuts, take screenshots or open the ring on X11. Other models automatically list Ubuntu-reported controls; recognized standard mouse buttons use the same backend. Configure the large dial's directional shortcuts in Website shortcuts. Other wheel and unsupported control mappings remain unavailable, with an explanation in the picker.
 - **Visual control selection:** click a control in the G402, MX Master 4 or dialpad illustration to select it in the action panel. Choosing a control from the panel's selector highlights it in the illustration too. The MX Master 4 includes its main buttons, Back, Forward, Gesture, thumb wheel, wheel-mode button and haptic panel; unsupported custom actions are explained when selected. Unknown device layouts use the selector without guessing physical button positions.
 - **MX Master 4 haptic actions:** over Bluetooth, select the Haptic Sense Panel on the image and assign an application, shortcut or system action, including Open Action Ring. Removing its assignment, pausing or quitting the worker restores its previous behavior. Wheel-mode and wheel movement mappings remain unavailable.
+- **Website shortcuts:** add exact-hostname profiles for Firefox or ChatGPT's embedded browser from **Website shortcuts**. ChatGPT website detection works automatically through Linux accessibility; Firefox uses an optional companion add-on. Override supported device buttons or assign clockwise/counterclockwise shortcuts to the Bluetooth MX Dialpad's large dial. Custom website Action Rings work in Firefox; ChatGPT retains normal application/default rings. Click a video viewer with Left/Right frame shortcuts to use the dial for frame stepping. Other controls inherit their normal actions. Only the focused website's hostname is passed to the worker. See [browser setup and website profiles](docs/WEBSITE-SHORTCUTS.md), including the Firefox development add-on's temporary-install limitation.
 - **Connection indicators:** each device has a green dot when connected, red when disconnected, and blinking yellow while searching. On both the home screen and Console component selector, a reported battery percentage appears beside the dot beneath the device; devices without battery data show only the dot. Hover for connection details. Devices seen during the open window's session remain visible after disconnecting; unconfirmed connections use steady yellow.
 - **Original app icons:** artwork comes from installed desktop entries and icon themes, fills the key with a narrow black border, and has no added white tile. Keys show icons only by default, with optional labels and neutral placeholders for missing artwork.
 - **Small background worker:** Rust handles the keypad, assigned device buttons, virtual shortcut input, panel icon and X11 focus events. Qt runs only while settings or the ring is open.
@@ -50,7 +51,7 @@ Install Rust 1.89 or newer with Cargo, then prepare the Ubuntu build tools:
 
 ```sh
 sudo apt install git build-essential pkg-config python3 python3-pip python3-venv \
-  libdbus-1-dev libudev-dev libx11-dev dpkg-dev
+  python3-gi gir1.2-atspi-2.0 libdbus-1-dev libudev-dev libx11-dev dpkg-dev
 git clone https://github.com/REGATTE/logi_ms_cc.git
 cd logi_ms_cc
 ```
@@ -110,7 +111,7 @@ Open **Action Ring** on the device home screen. Use the application icons and th
 
 To open it from hardware, choose **Open Action Ring** for a keypad key or a button on a device's controls page. Press once, then click an action. Escape, clicking outside, or pressing the trigger again closes it. Keys **1–7**, or arrows followed by Enter, also select actions. The worker remembers the original app and confirms its window before sending a shortcut. The popup does not replace the keypad's active-app context.
 
-G402 Back/Forward capture suppresses the original navigation click. Dialpad buttons use temporary HID++ diversion, leaving the existing dial/roller setup alone; removing an assignment, pausing or quitting normally restores its prior state. If the worker is forcibly killed while a dialpad button is assigned, cycle the dialpad's power before using that button normally. Bindings apply to a model, so two identical models share assignments. Wayland ring support and continuous ring adjustments such as scrubbing are not implemented.
+G402 Back/Forward capture suppresses the original navigation click. Dialpad buttons and an assigned large dial use separate HID++ diversion; the small roller retains its normal behavior. Removing an assignment, pausing or quitting normally restores the assigned control's prior state. If the worker is forcibly killed while a dialpad control is assigned, cycle the dialpad's power before using it normally. Bindings apply to a model, so two identical models share assignments. Wayland ring support and continuous ring adjustments are not implemented.
 
 The compact popup hides empty actions and supports at most seven actions. Its separate **+** always opens the matching ring editor, including when the ring is full. Previous eight-action layouts are backed up beside your settings before migration.
 
@@ -135,7 +136,7 @@ cargo build --manifest-path worker/Cargo.toml --locked
 MXCC_WORKER="$PWD/worker/target/debug/mxcc-worker" scripts/run-dev.sh
 ```
 
-Source runs need the same desktop libraries and device permissions as an installed package. The permission-repair dialog becomes available after package installation. Quit an already running tray worker before testing a rebuilt worker. `scripts/run-dev.sh` selects the checkout's virtual environment; the worker remains independent of the settings process under Ubuntu's user-session service manager.
+Source runs need the same desktop libraries and device permissions as an installed package, including `python3-gi` and `gir1.2-atspi-2.0` for ChatGPT embedded-browser detection. Its accessibility helper uses system `/usr/bin/python3`; no GI package is needed in the Qt virtual environment. The permission-repair dialog becomes available after package installation. Quit an already running tray worker before testing a rebuilt worker. `scripts/run-dev.sh` selects the checkout's virtual environment; the worker remains independent of the settings process under Ubuntu's user-session service manager.
 
 ```sh
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest
@@ -149,7 +150,7 @@ Automated tests do not access hardware. They cover app discovery, profiles and i
 ## Current limits
 
 - Wayland supports app launching, virtual shortcut input and manual profiles; focusing existing windows and automatic app/page detection are not implemented. Use an X11 session for those features.
-- G402 Back/Forward, Bluetooth MX Dialpad buttons and recognized standard X11 mouse buttons support the shared action choices. Wheel/dial mappings and other unsupported controls remain unimplemented. Multiple connected keypads cannot be configured independently; identical device models share button assignments.
+- G402 Back/Forward, Bluetooth MX Dialpad buttons and recognized standard X11 mouse buttons support the shared action choices. The Bluetooth MX Dialpad's large dial supports directional website shortcuts; its small roller and other wheel mappings remain unimplemented. Multiple connected keypads cannot be configured independently; identical device models share button assignments.
 - Applications must expose desktop entries to be discovered. Profiles assume default app shortcuts, which can vary by version, focused widget or user configuration.
 - Validation covers one Ubuntu 24.04 amd64 workstation and physical keypad. Other environments need testing before being treated as supported.
 

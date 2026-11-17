@@ -6,7 +6,8 @@ use crate::{
 };
 use mx_creative_worker::{
     config::{Action, ActionRing, RingLayout},
-    control::Foreground,
+    control::{Foreground, State},
+    website::WebsiteSnapshot,
 };
 use serde_json::{json, Value};
 use std::{
@@ -51,10 +52,22 @@ pub struct Session {
     token: String,
     pub foreground: Foreground,
     layout: RingLayout,
+    website: Option<WebsiteSnapshot>,
     expires: Instant,
     _process: Option<OverlayProcess>,
 }
 impl Session {
+    pub fn validate_website(&self, state: &State) -> Result<(), String> {
+        if self
+            .website
+            .as_ref()
+            .is_some_and(|snapshot| !state.website_snapshot_current(snapshot, Instant::now()))
+        {
+            return Err("The website changed; reopen its Action Ring".into());
+        }
+        Ok(())
+    }
+
     pub fn action(&self, slot: usize) -> Result<Action, String> {
         if slot >= 7 {
             return Err("Action Ring has at most seven actions".into());
@@ -130,7 +143,74 @@ pub fn choose_layout<'a>(
         .or_else(|| config.layouts.iter().find(|layout| layout.id == "default"))
 }
 
+fn choose_context_layout<'a>(
+    state: &'a State,
+    foreground: &Foreground,
+    now: Instant,
+) -> Option<(&'a RingLayout, Option<WebsiteSnapshot>)> {
+    let snapshot = state.website_snapshot(foreground, now);
+    let profile = snapshot.as_ref().and_then(|snapshot| {
+        state
+            .config
+            .website_profiles
+            .iter()
+            .find(|profile| profile.domain == snapshot.domain)
+    });
+    let website_layout = profile.and_then(|profile| profile.ring.as_ref());
+    // A default/application ring opened from a configured website also retains
+    // its origin, so other dialpad website shortcuts keep the same context.
+    let website = if profile.is_some() {
+        snapshot.filter(|snapshot| snapshot.source == "firefox")
+    } else {
+        None
+    };
+    website_layout
+        .or_else(|| choose_layout(&state.config.action_ring, foreground))
+        .map(|layout| (layout, website))
+}
+
+fn check_embedded_website_ring(
+    state: &State,
+    foreground: &Foreground,
+    now: Instant,
+) -> Result<(), String> {
+    if state
+        .website_snapshot(foreground, now)
+        .is_some_and(|snapshot| {
+            snapshot.source == "chatgpt"
+                && state
+                    .config
+                    .website_profiles
+                    .iter()
+                    .any(|profile| profile.domain == snapshot.domain && profile.ring.is_some())
+        })
+    {
+        return Err("Website-specific Action Rings are supported in Firefox. In ChatGPT, use website dial or button shortcuts; the website pane must stay focused.".into());
+    }
+    Ok(())
+}
+
 impl Ring {
+    /// The overlay captures its origin; browser updates may invalidate its actions.
+    pub fn browser_origin(&self) -> Option<&Foreground> {
+        self.session
+            .as_ref()
+            .filter(|session| session.website.is_some())
+            .map(|session| &session.foreground)
+    }
+
+    pub fn invalidate_website(&mut self, state: &State) -> bool {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.validate_website(state).is_err())
+        {
+            self.close();
+            return true;
+        }
+        false
+    }
+
     pub fn is_open(&self) -> bool {
         self.session.is_some()
     }
@@ -213,7 +293,7 @@ impl Ring {
     }
     pub fn toggle(
         &mut self,
-        config: &ActionRing,
+        state: &State,
         gui: &Path,
         sender: &Sender,
         session_type: &str,
@@ -233,9 +313,10 @@ impl Ring {
         if focus::is_ring(&foreground) {
             return Err("The previous ring is still closing; try again".into());
         }
-        let layout = choose_layout(config, &foreground)
-            .ok_or("Configure an Action Ring layout first")?
-            .clone();
+        check_embedded_website_ring(state, &foreground, Instant::now())?;
+        let (layout, website) = choose_context_layout(state, &foreground, Instant::now())
+            .ok_or("Configure an Action Ring layout first")?;
+        let layout = layout.clone();
         let mut random = [0u8; 16];
         File::open("/dev/urandom")
             .and_then(|mut file| file.read_exact(&mut random))
@@ -273,6 +354,7 @@ impl Ring {
             token,
             foreground,
             layout,
+            website,
             expires: Instant::now() + SESSION_LIMIT,
             _process: Some(process),
         });
@@ -348,6 +430,7 @@ mod tests {
                         },
                     })],
                 },
+                website: None,
                 expires: Instant::now() + Duration::from_secs(30),
                 _process: None,
             }),
@@ -406,5 +489,205 @@ mod tests {
             ]
         );
         assert!(ring.take("current-token").is_err());
+    }
+    #[test]
+    fn website_ring_precedes_application_then_default_and_stale_actions_fail() {
+        let value = json!({"version":1,"auto_switch":true,
+            "pages":[{"name":"Apps","keys":[null,null,null,null,null,null,null,null,null]},
+                     {"name":"Shortcuts","keys":[null,null,null,null,null,null,null,null,null]}],
+            "profiles":[],"website_profiles":[{"domain":"example.com","device_actions":[],"ring":{
+                "id":"website:example.com","wm_classes":[],"slots":[]}}],
+            "action_ring":{"layouts":[{"id":"default","wm_classes":[],"slots":[]},
+                {"id":"firefox.desktop","wm_classes":["firefox"],"slots":[]}],"bindings":[]}});
+        let config: mx_creative_worker::config::Config = serde_json::from_value(value).unwrap();
+        config.validate().unwrap();
+        let mut state = State::new(config, "x11".into());
+        let foreground = Foreground {
+            window: 44,
+            name: "Firefox".into(),
+            identities: vec!["firefox".into()],
+        };
+        let now = Instant::now();
+        assert_eq!(
+            choose_context_layout(&state, &foreground, now)
+                .unwrap()
+                .0
+                .id,
+            "firefox.desktop"
+        );
+        state
+            .browser_context(
+                &mx_creative_worker::website::BrowserReport {
+                    browser: "firefox".into(),
+                    session: "0123456789abcdef0123456789abcdef".into(),
+                    domain: Some("example.com".into()),
+                    focused: true,
+                    window_id: Some(1),
+                },
+                foreground.clone(),
+                now,
+            )
+            .unwrap();
+        let (layout, snapshot) = choose_context_layout(&state, &foreground, now).unwrap();
+        assert_eq!(layout.id, "website:example.com");
+        let mut ring = active_ring();
+        ring.session.as_mut().unwrap().layout = layout.clone();
+        ring.session.as_mut().unwrap().foreground = foreground.clone();
+        ring.session.as_mut().unwrap().website = snapshot;
+        assert!(ring
+            .session
+            .as_ref()
+            .unwrap()
+            .validate_website(&state)
+            .is_ok());
+        assert_eq!(ring.browser_origin(), Some(&foreground));
+        assert!(ring
+            .session
+            .as_ref()
+            .unwrap()
+            .configuration_command(Path::new("app"))
+            .get_args()
+            .any(|arg| arg == "website:example.com"));
+        state
+            .browser_context(
+                &mx_creative_worker::website::BrowserReport {
+                    browser: "firefox".into(),
+                    session: "0123456789abcdef0123456789abcdef".into(),
+                    domain: Some("other.test".into()),
+                    focused: false,
+                    window_id: Some(1),
+                },
+                foreground.clone(),
+                now,
+            )
+            .unwrap();
+        assert!(ring
+            .session
+            .as_ref()
+            .unwrap()
+            .validate_website(&state)
+            .is_err());
+        assert!(ring.invalidate_website(&state));
+        assert!(!ring.is_open());
+        assert_eq!(
+            choose_context_layout(&state, &foreground, now)
+                .unwrap()
+                .0
+                .id,
+            "firefox.desktop"
+        );
+        assert_eq!(
+            choose_context_layout(
+                &state,
+                &Foreground {
+                    window: 90,
+                    name: "Editor".into(),
+                    identities: vec![]
+                },
+                now
+            )
+            .unwrap()
+            .0
+            .id,
+            "default"
+        );
+    }
+
+    #[test]
+    fn embedded_custom_site_ring_is_rejected_but_default_ring_survives_context_loss() {
+        use mx_creative_worker::embedded::{Observation, Report, Target};
+        let mut value = json!({"version":1,"auto_switch":true,"profiles":[],
+            "pages":[{"name":"Apps","keys":[null,null,null,null,null,null,null,null,null]},
+                {"name":"Shortcuts","keys":[null,null,null,null,null,null,null,null,null]}],
+            "website_profiles":[{"domain":"example.com","device_actions":[],"ring":null}],
+            "action_ring":{"layouts":[{"id":"default","wm_classes":[],"slots":[]}],"bindings":[]}});
+        let config = serde_json::from_value(value.clone()).unwrap();
+        let mut state = State::new(config, "x11".into());
+        let foreground = Foreground {
+            window: 42,
+            name: "Chatgpt".into(),
+            identities: vec!["chatgpt".into()],
+        };
+        let now = Instant::now();
+        state.focus_changed(foreground.clone(), now);
+        state.embedded_target(
+            Target {
+                window: 42,
+                pid: 1000,
+                domains: vec!["example.com".into()],
+                target_revision: 1,
+            },
+            now,
+        );
+        state
+            .embedded_report(
+                Observation {
+                    generation: 1,
+                    received: now,
+                    result: Ok(Report {
+                        window: 42,
+                        pid: 1000,
+                        target_revision: 1,
+                        revision: 1,
+                        domain: Some("example.com".into()),
+                        ready: true,
+                        error: None,
+                    }),
+                },
+                &foreground,
+                1000,
+                now,
+            )
+            .unwrap();
+        assert!(check_embedded_website_ring(&state, &foreground, now).is_ok());
+        let (layout, website) = choose_context_layout(&state, &foreground, now).unwrap();
+        assert_eq!(layout.id, "default");
+        assert!(website.is_none());
+        let mut ring = active_ring();
+        ring.session.as_mut().unwrap().website = website;
+        state.embedded_target(
+            Target {
+                target_revision: 2,
+                ..Target::default()
+            },
+            now,
+        );
+        assert!(!ring.invalidate_website(&state));
+        assert!(ring.is_open());
+        value["website_profiles"][0]["ring"] =
+            json!({"id":"website:example.com","wm_classes":[],"slots":[]});
+        state.reload(serde_json::from_value(value).unwrap());
+        state.embedded_target(
+            Target {
+                window: 42,
+                pid: 1000,
+                domains: vec!["example.com".into()],
+                target_revision: 3,
+            },
+            now,
+        );
+        state
+            .embedded_report(
+                Observation {
+                    generation: 1,
+                    received: now,
+                    result: Ok(Report {
+                        window: 42,
+                        pid: 1000,
+                        target_revision: 3,
+                        revision: 3,
+                        domain: Some("example.com".into()),
+                        ready: true,
+                        error: None,
+                    }),
+                },
+                &foreground,
+                1000,
+                now,
+            )
+            .unwrap();
+        assert!(check_embedded_website_ring(&state, &foreground, now)
+            .unwrap_err()
+            .contains("Firefox"));
     }
 }

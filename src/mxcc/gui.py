@@ -6,11 +6,11 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QSize, Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QProcess, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
@@ -35,6 +35,8 @@ from .profiles import ProfileExistsError, atomic_json, import_profile, load_prof
 from .ring_editor import RingEditor
 from .transfer import export_bundle, read_bundle, write_imported_profiles
 from .window_frame import RoundedWindow
+from .website_editor import WebsiteEditor
+from .website_profiles import domain_from_layout_id
 
 
 def label(text: str, kind: str = "", wrap: bool = False) -> QLabel:
@@ -189,6 +191,10 @@ class MainWindow(RoundedWindow):
         ring_scroll.setWidget(self.ring_editor)
         ring_page_layout.addWidget(ring_scroll, 1)
         self.views.addWidget(self.ring_page)
+        self._build_websites()
+        self.home.header_layout.addWidget(button("Website shortcuts", self.show_websites))
+        self.details.header_layout.addWidget(button("Website shortcuts", self.show_websites))
+        self.ring_header.addWidget(button("Website rings", self.show_websites))
         self._refresh_device_actions()
         self._populate_apps()
         self.persist(notify=False)
@@ -220,7 +226,7 @@ class MainWindow(RoundedWindow):
         else:
             self.show_home()
         for region in (root, self.footer, self.home, self.console, self.editor,
-                       self.details, self.ring_page, self.settings_page):
+                       self.details, self.ring_page, self.settings_page, self.website_page):
             self.mark_drag_region(region)
         self._page_headers = {
             self.home: self.home.header_layout,
@@ -229,6 +235,7 @@ class MainWindow(RoundedWindow):
             self.details: self.details.header_layout,
             self.ring_page: self.ring_header,
             self.settings_page: self.settings_header,
+            self.website_page: self.website_header,
         }
         self._controls_header = None
         self.views.currentChanged.connect(self._place_window_controls)
@@ -265,6 +272,7 @@ class MainWindow(RoundedWindow):
         self.devices = {identifier: detected.get(identifier, replace(device, connected=False, battery_percent=None))
                         for identifier, device in self.devices.items()}
         self.devices.update(detected)
+        self.website_editor.set_devices(self.devices.values())
         self.home.update_devices(self.devices.values())
         self.console.update_devices(self.devices.values())
         self.home.set_error("")
@@ -317,6 +325,10 @@ class MainWindow(RoundedWindow):
         self.home.setFocus()
 
     def show_ring(self, layout_id=None, *, add_action=False):
+        if isinstance(layout_id, str) and (domain := domain_from_layout_id(layout_id)):
+            self.show_websites()
+            self.website_editor.open_website(domain, ring=True, add_action=add_action)
+            return
         self.selected_device_id = None
         self.ring_editor.set_settings(self.settings)
         self.views.setCurrentWidget(self.ring_page)
@@ -337,6 +349,86 @@ class MainWindow(RoundedWindow):
 
     def _refresh_device_actions(self):
         self.details.set_actions(self.settings.get("device_actions", []), self.settings["action_ring"]["bindings"])
+
+    def _build_websites(self):
+        self.website_page = QWidget()
+        layout = QVBoxLayout(self.website_page)
+        layout.setContentsMargins(12, 16, 12, 0)
+        self.website_header = QHBoxLayout()
+        back = button("←", self.show_home)
+        back.setObjectName("topbarButton")
+        back.setAccessibleName("All devices")
+        self.website_header.addWidget(back)
+        self.website_header.addWidget(label("Website shortcuts", "deviceTitle"))
+        self.website_header.addStretch()
+        layout.addLayout(self.website_header)
+        self.website_editor = WebsiteEditor(self.settings, self.apps)
+        self.website_editor.changed.connect(self.save_website_profiles)
+        self.website_editor.setup_requested.connect(self.setup_firefox)
+        scroll = QScrollArea()
+        scroll.setObjectName("editorScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(self.website_editor)
+        layout.addWidget(scroll, 1)
+        self.views.addWidget(self.website_page)
+
+    def show_websites(self):
+        self.website_editor.set_settings(self.settings)
+        device = self.devices.get(self.selected_device_id)
+        if device:
+            self.website_editor.select_device(device.vendor_id, device.product_id)
+        self.website_editor.set_status(self.status)
+        self.views.setCurrentWidget(self.website_page)
+
+    def save_website_profiles(self, values):
+        try:
+            self.persist(settings={**self.settings, "website_profiles": values})
+        except (OSError, ValueError, RuntimeError) as error:
+            self.website_editor.set_settings(self.settings)
+            QMessageBox.warning(self, "Could not save website shortcuts", str(error))
+
+    def setup_firefox(self):
+        from .browser_setup import setup_firefox
+        try:
+            result = setup_firefox()
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, "Could not set up Firefox", str(error))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Connect Firefox")
+        dialog.resize(620, 340)
+        layout = QVBoxLayout(dialog)
+        instructions = label(
+            "The local Firefox connection is ready.\n\n"
+            "1. Open Firefox setup below.\n"
+            "2. Click Load Temporary Add-on.\n"
+            "3. Select manifest.json in the extension folder.\n"
+            "4. Allow the local connection if Firefox asks.\n\n"
+            "The development add-on remains loaded until Firefox restarts. "
+            "Permanent installation requires a Mozilla-signed add-on.", wrap=True)
+        layout.addWidget(instructions)
+        path = str(result["extension_path"])
+        location = label(path, "muted", True)
+        location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(location)
+        controls = QHBoxLayout()
+        controls.addWidget(button("Open Firefox setup", self._open_firefox_setup))
+        controls.addWidget(button("Open extension folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))))
+        controls.addWidget(button("Copy manifest path", lambda: QApplication.clipboard().setText(path)))
+        layout.addLayout(controls)
+        layout.addWidget(button("Close", dialog.accept))
+        self.firefox_setup_dialog = dialog
+        dialog.show()
+
+    def _open_firefox_setup(self):
+        import subprocess
+        try:
+            subprocess.Popen(["firefox", "about:debugging#/runtime/this-firefox"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as error:
+            QMessageBox.warning(self, "Could not open Firefox", str(error))
 
     def assign_device_action(self, control_id, entry):
         device = self.devices.get(self.selected_device_id)
@@ -390,11 +482,14 @@ class MainWindow(RoundedWindow):
         if current is self.settings_page:
             return
         if return_to is None:
-            return_to = "ring" if current is self.ring_page else "editor" if current is self.editor else "console" if current is self.console else "details" if current is self.details else "home"
+            return_to = "websites" if current is self.website_page else "ring" if current is self.ring_page else "editor" if current is self.editor else "console" if current is self.console else "details" if current is self.details else "home"
         self._settings_return = return_to
         self.views.setCurrentWidget(self.settings_page)
 
     def _leave_settings(self):
+        if self._settings_return == "websites":
+            self.show_websites()
+            return
         if self._settings_return == "ring":
             self.show_ring()
             return
@@ -1058,6 +1153,7 @@ class MainWindow(RoundedWindow):
         self._populate_apps()
         self.ring_editor.set_applications(self.apps)
         self.details.set_applications(self.apps)
+        self.website_editor.set_applications(self.apps)
         self.notice.setText(f"Found {len(self.apps)} installed applications.")
 
     def filter_apps(self, text):
@@ -1220,6 +1316,7 @@ class MainWindow(RoundedWindow):
             self.persist()
             self._populate_apps()
             self.ring_editor.set_settings(self.settings)
+            self.website_editor.set_settings(self.settings)
             self._refresh_device_actions()
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.warning(self, "Import failed", str(exc))
@@ -1271,6 +1368,7 @@ class MainWindow(RoundedWindow):
 
     def _worker_failed(self, error):
         self.status = {}
+        self.website_editor.set_status({})
         self.connection.setText("Worker not running" if isinstance(error, ipc.WorkerUnavailable) else "Keypad setup failed")
         self.active_label.setText("Active application: —")
         for widget in self.permission_labels.values():
@@ -1287,9 +1385,12 @@ class MainWindow(RoundedWindow):
             self._worker_failed(exc)
             return
         status = self.status
+        self.website_editor.set_status(status)
         device = self.devices.get(self.selected_device_id)
         if device is not None:
-            backend_name = ("dialpad_buttons" if device.product_id == 0xbc00 else
+            backend_name = ("dialpad_dial" if device.product_id == 0xbc00 and
+                            self.details.selected_control == "dial:main" else
+                            "dialpad_buttons" if device.product_id == 0xbc00 else
                             "mx_master4_buttons" if device.product_id == 0xb042 and
                             self.details.selected_control == "hidpp:416" else "device_buttons")
             backend = status.get(backend_name, {})
@@ -1298,10 +1399,13 @@ class MainWindow(RoundedWindow):
         self.active_label.setText("Active application: " + (status.get("active_app") or "—"))
         self.permission_labels["keypad"].setText("Ready" if status.get("keypad_access") else "Connect the keypad or set up device access")
         dialpad_status = status.get("dialpad_buttons", {})
+        dial_status = status.get("dialpad_dial", {})
         self.permission_labels["dialpad"].setText(
-            "Permission required · use Set up device permissions below" if dialpad_status.get("permission_required") else
-            "Ready" if dialpad_status.get("active") else
-            "\n".join(dialpad_status.get("errors", [])) or "Assign a dialpad button to check access")
+            "Permission required · use Set up device permissions below"
+            if dialpad_status.get("permission_required") or dial_status.get("permission_required") else
+            "\n".join(dialpad_status.get("errors", []) + dial_status.get("errors", [])) or
+            ("Ready" if dialpad_status.get("active") or dial_status.get("active") else
+             "Assign a dialpad control to check access"))
         master4_status = status.get("mx_master4_buttons", {})
         self.permission_labels["master4"].setText(
             "Permission required · use Set up device permissions below" if master4_status.get("permission_required") else

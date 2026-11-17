@@ -1,4 +1,4 @@
-"""Shared portable actions for keys and supported device buttons."""
+"""Shared portable actions for keys and supported device controls."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ ENTRY_FIELDS = {"label", "icon", "action"}
 TARGET_FIELDS = {"vendor_id", "product_id", "control_id"}
 
 
-def validate_action_entry(value, *, allow_ring=True):
+def validate_action_entry(value, *, allow_ring=True, allow_dial=False):
     """Normalize declarative actions; executable commands and paths are rejected."""
     from .profiles import DESKTOP_PATTERN, ICON_PATTERN
     if not isinstance(value, dict) or set(value) != ENTRY_FIELDS:
@@ -32,6 +32,10 @@ def validate_action_entry(value, *, allow_ring=True):
             raise ValueError("Application actions require a desktop entry ID")
     elif kind == "shortcut" and set(action) == {"type", "keys"}:
         action = {"type": "shortcut", "keys": normalize_shortcut(action["keys"])}
+    elif (kind == "dial_shortcut" and allow_dial
+          and set(action) == {"type", "clockwise", "counterclockwise"}):
+        action = {"type": "dial_shortcut", "clockwise": normalize_shortcut(action["clockwise"]),
+                  "counterclockwise": normalize_shortcut(action["counterclockwise"])}
     elif kind == "screenshot" and set(action) == {"type"}:
         pass
     elif kind == "open_ring" and allow_ring and set(action) == {"type"}:
@@ -71,9 +75,9 @@ def launcher_available(value, apps=()):
                                   or entry["action"]["desktop_id"] in _applications(apps))
 
 
-def compile_entry(value, apps, selections):
+def compile_entry(value, apps, selections, *, allow_dial=False):
     """Resolve local app identities/artwork, omitting an unavailable application."""
-    entry = validate_action_entry(value)
+    entry = validate_action_entry(value, allow_dial=allow_dial)
     if entry["action"]["type"] != "launch":
         return entry
     identifier = entry["action"]["desktop_id"]
@@ -98,13 +102,18 @@ def profile_entry_action(entry):
                                   {"type": "shortcut", "keys": entry["keys"]}})
 
 
+def is_dial_target(vendor_id, product_id, control_id):
+    return (type(vendor_id) is int and type(product_id) is int
+            and (vendor_id, product_id, control_id) == (0x046d, 0xbc00, "dial:main"))
+
+
 def supported_device_target(vendor_id, product_id, control_id):
     if type(vendor_id) is not int or vendor_id != 0x046d or type(product_id) is not int or not 1 <= product_id <= 0xffff:
         return False
     if product_id == 0xc07e:
         return control_id in ("button:4", "button:5")
     if product_id == 0xbc00:
-        return control_id in ("button:1", "button:2", "button:3", "button:4")
+        return control_id in ("button:1", "button:2", "button:3", "button:4", "dial:main")
     if product_id == 0xb042 and control_id == "hidpp:416":
         return True
     return control_id in tuple(f"key:{code}" for code in range(272, 279))
@@ -112,7 +121,7 @@ def supported_device_target(vendor_id, product_id, control_id):
 
 def validate_device_actions(values, legacy_bindings=()):
     if not isinstance(values, list) or len(values) + len(legacy_bindings) > 256:
-        raise ValueError("At most 256 device button assignments are supported")
+        raise ValueError("At most 256 device control assignments are supported")
     seen = {(entry["vendor_id"], entry["product_id"], entry["control_id"]) for entry in legacy_bindings}
     result = []
     for item in values:
@@ -122,8 +131,22 @@ def validate_device_actions(values, legacy_bindings=()):
         if not supported_device_target(*target):
             raise ValueError("This device control does not support action assignments")
         if target in seen:
-            raise ValueError("Duplicate device button assignment")
+            raise ValueError("Duplicate device control assignment")
         seen.add(target)
+        entry = validate_action_entry({name: item[name] for name in ENTRY_FIELDS},
+                                      allow_dial=is_dial_target(*target))
+        if is_dial_target(*target) and entry["action"]["type"] != "dial_shortcut":
+            raise ValueError("The large dial requires clockwise and counterclockwise shortcuts")
         result.append({**{name: item[name] for name in TARGET_FIELDS},
-                       **validate_action_entry({name: item[name] for name in ENTRY_FIELDS})})
+                       **entry})
     return result
+
+
+def compile_device_action(value, apps, selections):
+    """Allow directional actions only after validating their exact device target."""
+    item = validate_device_actions([value])[0]
+    compiled = compile_entry({name: item[name] for name in ENTRY_FIELDS}, apps, selections,
+                             allow_dial=is_dial_target(item["vendor_id"], item["product_id"], item["control_id"]))
+    if compiled is None:
+        return None
+    return {**{name: item[name] for name in TARGET_FIELDS}, "action": compiled["action"]}

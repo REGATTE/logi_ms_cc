@@ -9,10 +9,11 @@ from typing import Callable, Iterable
 
 from . import paths
 from .applications import Application, discover_applications
-from .actions import (compile_entry, launcher_available, launcher_entry, profile_entry_action,
+from .actions import (compile_device_action, compile_entry, launcher_available, launcher_entry, profile_entry_action,
                       validate_action_entry, validate_device_actions)
 from .profiles import DESKTOP_PATTERN, ID_PATTERN, ProfileError, atomic_json, validate_profile
 from .ring_configuration import compile_ring, default_ring, migrate_legacy_ring, validate_ring
+from .website_profiles import compile_website_profiles, validate_website_profiles
 
 
 class ConfigurationError(ValueError):
@@ -60,6 +61,7 @@ def default_settings(apps: Iterable[Application]) -> dict:
         "theme": "system",
         "action_ring": default_ring(launchers),
         "device_actions": [],
+        "website_profiles": [],
     }
 
 
@@ -67,7 +69,7 @@ def validate_settings(settings: object) -> dict:
     required = {"version", "launchers", "profile_assignments", "auto_switch", "start_at_login", "show_labels"}
     if not isinstance(settings, dict) or not required.issubset(settings):
         raise ConfigurationError("Settings must contain version, launchers, profile_assignments, auto_switch, start_at_login and show_labels")
-    if set(settings) - required - {"theme", "action_ring", "device_actions"}:
+    if set(settings) - required - {"theme", "action_ring", "device_actions", "website_profiles"}:
         raise ConfigurationError("Settings contain unsupported fields")
     if type(settings["version"]) is not int or settings["version"] != 1:
         raise ConfigurationError("Settings version must be 1")
@@ -99,10 +101,12 @@ def validate_settings(settings: object) -> dict:
     try:
         ring = validate_ring(settings.get("action_ring", default_ring(value for value in launchers if isinstance(value, str))))
         device_actions = validate_device_actions(settings.get("device_actions", []), ring["bindings"])
+        website_profiles = validate_website_profiles(settings.get("website_profiles", []))
     except ValueError as error:
         raise ConfigurationError(str(error)) from error
     return {**settings, "launchers": normalized_launchers, "profile_assignments": dict(assignments),
-            "theme": theme, "action_ring": ring, "device_actions": device_actions}
+            "theme": theme, "action_ring": ring, "device_actions": device_actions,
+            "website_profiles": website_profiles}
 
 
 def load_settings(apps: Iterable[Application] | None = None) -> dict:
@@ -128,6 +132,11 @@ def load_settings(apps: Iterable[Application] | None = None) -> dict:
 
 def save_settings(settings: dict) -> None:
     data = validate_settings(settings)
+    # Website profiles can contain many actions. Never save a configuration
+    # that the bounded reader would refuse on the next application launch.
+    encoded = (json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+    if len(encoded) > 256 * 1024:
+        raise ConfigurationError("Settings exceed 256 KiB; remove unused profiles or actions")
     try:
         try:
             with paths.settings_path().open("rb") as stream:
@@ -238,9 +247,9 @@ def compile_runtime(settings: dict, apps: Iterable[Application], profiles: dict[
         raise ConfigurationError("Runtime supports at most 256 profiles and 64 window classes per profile")
     device_actions = []
     for item in settings["device_actions"]:
-        compiled = compile_entry({name: item[name] for name in ("label", "icon", "action")}, indexed, selections)
+        compiled = compile_device_action(item, indexed, selections)
         if compiled:
-            device_actions.append({**{name: item[name] for name in ("vendor_id", "product_id", "control_id")},
-                                   "action": compiled["action"]})
+            device_actions.append(compiled)
     return {"version": 1, "auto_switch": settings["auto_switch"], "pages": pages, "profiles": list(runtime_profiles.values()),
-            "action_ring": compile_ring(settings["action_ring"], apps, selections), "device_actions": device_actions}
+            "action_ring": compile_ring(settings["action_ring"], apps, selections), "device_actions": device_actions,
+            "website_profiles": compile_website_profiles(settings["website_profiles"], apps, selections)}

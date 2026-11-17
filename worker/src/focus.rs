@@ -84,6 +84,7 @@ pub fn start(sender: Sender) {
                 .intern_atom(false, b"_NET_WM_DESKTOP_FILE")?
                 .reply()?
                 .atom;
+            let pid = conn.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom;
             conn.change_window_attributes(
                 root,
                 &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
@@ -132,7 +133,7 @@ pub fn start(sender: Sender) {
             loop {
                 match conn.wait_for_event()? {
                     XEvent::PropertyNotify(event)
-                        if [active, class, gtk_id, desktop_file].contains(&event.atom) =>
+                        if [active, class, gtk_id, desktop_file, pid].contains(&event.atom) =>
                     {
                         update()?
                     }
@@ -182,6 +183,26 @@ pub fn is_ring(foreground: &Foreground) -> bool {
         .iter()
         .chain(std::iter::once(&foreground.name))
         .any(|identity| identity.eq_ignore_ascii_case("mx-creative-control-ring"))
+}
+
+/// Read the owner of a freshly observed X11 window; never infer process identity
+/// from a title or from the accessibility tree itself.
+pub fn window_pid(window: u32) -> Result<u32, String> {
+    let read = || -> Result<u32, Box<dyn std::error::Error>> {
+        if window == 0 {
+            return Ok(0);
+        }
+        let (conn, _) = x11rb::connect(None)?;
+        let atom = conn.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom;
+        let property = conn
+            .get_property(false, window, atom, AtomEnum::CARDINAL, 0, 1)?
+            .reply()?;
+        Ok(property
+            .value32()
+            .and_then(|mut values| values.next())
+            .unwrap_or(0))
+    };
+    read().map_err(|error| format!("Cannot read the active application's process: {error}"))
 }
 
 #[cfg(test)]

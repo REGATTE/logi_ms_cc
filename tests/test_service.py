@@ -111,6 +111,142 @@ def test_existing_transient_unit_is_reused_during_restart(lifecycle):
     popen.assert_not_called()
 
 
+def test_collected_transient_unit_is_recreated_after_upgrade(lifecycle):
+    _, arguments, _, run, popen = lifecycle
+    run.side_effect = [result("255"), result("loaded"),
+                       result(stderr="Unit not found", code=5), result("not-found", code=4), result()]
+    assert service.ensure_running() == compatible_status()
+    command = run.call_args.args[0]
+    assert command[0] == "systemd-run"
+    assert command[command.index("--") + 1:] == arguments
+    popen.assert_not_called()
+
+
+def test_failed_transient_unit_is_not_recreated_if_it_still_exists(lifecycle):
+    _, _, _, run, popen = lifecycle
+    run.side_effect = [result("255"), result("loaded"),
+                       result(stderr="Service failed", code=1), result("loaded")]
+    with pytest.raises(RuntimeError, match="Service failed"):
+        service.ensure_running()
+    assert not any(call.args[0][0] == "systemd-run" for call in run.call_args_list)
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [OSError("manager unavailable"), subprocess.TimeoutExpired("systemctl", 3)])
+def test_transient_recheck_failure_keeps_original_start_error(lifecycle, failure):
+    _, _, _, run, popen = lifecycle
+    run.side_effect = [result("255"), result("loaded"),
+                       result(stderr="Service failed", code=1), failure]
+    with pytest.raises(RuntimeError, match="Service failed"):
+        service.ensure_running()
+    assert not any(call.args[0][0] == "systemd-run" for call in run.call_args_list)
+    popen.assert_not_called()
+
+
+def test_successful_start_of_collected_upgrade_unit_recreates_once_when_not_ready(lifecycle):
+    _, arguments, request, run, popen = lifecycle
+    request.side_effect = [
+        {"ok": True, "capabilities": ["website_profiles_v1"]}, {"ok": True},
+        *[ipc.WorkerUnavailable("not ready")] * 30, compatible_status(),
+    ]
+    run.side_effect = [result(__version__), result("255"), result("loaded"), result(),
+                       result("not-found", code=4), result("255"), result("not-found"), result()]
+    assert service.ensure_running() == compatible_status()
+    commands = [item.args[0] for item in run.call_args_list]
+    assert commands.count(["systemctl", "--user", "start", service.DEV_SERVICE]) == 1
+    creations = [command for command in commands if command[0] == "systemd-run"]
+    assert len(creations) == 1
+    assert creations[0][creations[0].index("--") + 1:] == arguments
+    assert service.time.sleep.call_count == 30
+    popen.assert_not_called()
+
+
+def test_collected_unit_retry_reuses_concurrently_recreated_unit(lifecycle):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = [*[ipc.WorkerUnavailable("not ready")] * 31, compatible_status()]
+    run.side_effect = [result("255"), result("loaded"), result(), result("not-found", code=4),
+                       result("255"), result("loaded"), result()]
+    assert service.ensure_running() == compatible_status()
+    commands = [item.args[0] for item in run.call_args_list]
+    assert commands.count(["systemctl", "--user", "start", service.DEV_SERVICE]) == 2
+    assert not any(command[0] == "systemd-run" for command in commands)
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize("inspection", [result("loaded"), result("masked"), result("not-found", code=1)])
+def test_readiness_timeout_does_not_recreate_without_confirmed_absent_unit(lifecycle, inspection):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = ipc.WorkerUnavailable("not ready")
+    run.side_effect = [result("255"), result("loaded"), result(), inspection]
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        service.ensure_running()
+    assert request.call_count == 31
+    assert not any(item.args[0][0] == "systemd-run" for item in run.call_args_list)
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [OSError("manager unavailable"), subprocess.TimeoutExpired("systemctl", 3)])
+def test_readiness_recheck_errors_are_reported_without_second_launch(lifecycle, failure):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = ipc.WorkerUnavailable("not ready")
+    run.side_effect = [result("255"), result("loaded"), result(), failure]
+    with pytest.raises(RuntimeError, match="did not become ready; could not inspect"):
+        service.ensure_running()
+    assert run.call_count == 4
+    popen.assert_not_called()
+
+
+def test_recreated_transient_worker_start_failure_is_reported(lifecycle):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = ipc.WorkerUnavailable("not ready")
+    run.side_effect = [result("255"), result("loaded"), result(), result("not-found", code=4),
+                       result("255"), result("not-found"), result(stderr="Replacement start failed", code=1)]
+    with pytest.raises(RuntimeError, match="Replacement start failed"):
+        service.ensure_running()
+    assert request.call_count == 31
+    popen.assert_not_called()
+
+
+def test_recreated_transient_worker_gets_only_one_additional_readiness_wait(lifecycle):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = ipc.WorkerUnavailable("not ready")
+    run.side_effect = [result("255"), result("loaded"), result(), result("not-found", code=4),
+                       result("255"), result("not-found"), result()]
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        service.ensure_running()
+    assert request.call_count == 61
+    assert run.call_count == 7
+    assert service.time.sleep.call_count == 60
+    popen.assert_not_called()
+
+
+def test_user_manager_disappearing_during_retry_does_not_launch_direct_worker(lifecycle):
+    _, _, request, run, popen = lifecycle
+    request.side_effect = ipc.WorkerUnavailable("not ready")
+    run.side_effect = [result("255"), result("loaded"), result(), result("not-found", code=4),
+                       result(stderr="Manager unavailable", code=1)]
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        service.ensure_running()
+    assert request.call_count == 31
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize("managed", [True, False])
+def test_nontransient_readiness_timeout_never_tries_another_launch(lifecycle, managed):
+    unit, _, request, run, popen = lifecycle
+    request.side_effect = ipc.WorkerUnavailable("not ready")
+    if managed:
+        unit.write_text("[Service]\n")
+        run.side_effect = [result("255"), result()]
+    else:
+        run.side_effect = [result(stderr="Manager unavailable", code=1)]
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        service.ensure_running()
+    assert request.call_count == 31
+    assert run.call_count == (2 if managed else 1)
+    assert popen.call_count == (0 if managed else 1)
+
+
 def test_unavailable_user_manager_falls_back_to_detached_process(lifecycle):
     _, arguments, _, run, popen = lifecycle
     run.return_value = result(stderr="Failed to connect to bus", code=1)
@@ -147,11 +283,12 @@ def test_missing_configuration_does_not_start_any_worker(lifecycle):
     popen.assert_not_called()
 
 
-def test_old_worker_is_verified_stopped_and_restarted_with_installed_unit(lifecycle):
+@pytest.mark.parametrize("old_capability", ["device_actions_v1", "website_profiles_v1", "dialpad_dial_v1"])
+def test_old_worker_is_verified_stopped_and_restarted_with_installed_unit(lifecycle, old_capability):
     unit, _, request, run, popen = lifecycle
     unit.write_text('[Service]\n')
     service.socket_path().touch()
-    old = {'ok': True, 'pid': 41, 'capabilities': ['device_actions_v1']}
+    old = {'ok': True, 'pid': 41, 'capabilities': [old_capability]}
     current = compatible_status(pid=42)
     order = []
     responses = iter([old, {'ok': True}, current])

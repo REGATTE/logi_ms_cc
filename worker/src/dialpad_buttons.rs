@@ -280,7 +280,7 @@ fn run(
     }
 }
 
-fn discover(target: Target) -> io::Result<Option<PathBuf>> {
+pub(super) fn discover(target: Target) -> io::Result<Option<PathBuf>> {
     let Ok(entries) = fs::read_dir("/sys/class/hidraw") else {
         return Ok(None);
     };

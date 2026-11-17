@@ -3,7 +3,8 @@
 The initial package targets Ubuntu 24.04 with its system Python 3.12, on the
 architecture used to build it. It controls the USB MX Creative **Keypad** and
 supports application, shortcut and system mappings on supported mouse/dialpad
-buttons. Wheels and unsupported controls remain unavailable in the picker.
+buttons. Website profiles also support directional shortcuts on the Bluetooth
+MX Dialpad's large dial. Other wheels and unsupported controls remain unavailable.
 This is an independent
 community application, not Logitech's Logi Options+ software.
 
@@ -25,6 +26,8 @@ The package includes its pinned Qt runtime. Installation does not run pip or
 download application code; apt may download declared Ubuntu system dependencies.
 For a completely offline PC, those Ubuntu dependencies must already be present.
 An arm64 machine requires an arm64 build.
+ChatGPT embedded-browser website detection uses the declared `python3-gi` and
+`gir1.2-atspi-2.0` dependencies through system `/usr/bin/python3`.
 
 The rounded settings window has no native title bar. Drag empty header or footer
 space to move it, use its edges to resize, and use the top-right icons to
@@ -71,7 +74,8 @@ select it in the control dropdown. Choosing a control in the dropdown highlights
 it on the image. For supported buttons, choose an application, keyboard shortcut
 or system action, then press **Apply**; **Remove** clears its mapping. Selecting
 a control alone does not change device behavior. Each wheel or dial is shown as
-one physical control; its mapping remains unavailable. Devices without known
+one physical control. Configure the MX Dialpad's large dial in **Website shortcuts**;
+other wheel movement mappings remain unavailable. Devices without known
 physical layouts still support selection through the dropdown.
 
 The MX Master 4 uses a front three-quarter view so its main buttons and side
@@ -88,7 +92,15 @@ movement remains a separate dropdown entry. Any extra input reported by Linux
 without a verified physical location stays in the dropdown.
 
 The home screen lists connected Logitech USB/HID and Bluetooth devices, grouping
-the keypad and dialpad under **MX Creative Console**. The shared bottom-left
+the keypad and dialpad under **MX Creative Console**. The **Website shortcuts**
+button opens website profiles for device buttons, large-dial directional shortcuts and Action Rings.
+ChatGPT's embedded browser is detected automatically when you click inside a
+website. Clicking chat or the address bar restores normal actions. Click the
+video viewer before using a frame-step dial shortcut. For Firefox, follow
+[the browser setup guide](WEBSITE-SHORTCUTS.md) to connect the optional companion
+extension. Custom website Action Rings work in Firefox only; normal app/default
+rings remain available in ChatGPT. Device discovery continues to work without
+either browser connection. The shared bottom-left
 Refresh icon is available on every page and updates the inventory; it also refreshes while the window is
 open. Open the Console card to see its components side by side and select the
 keypad or dialpad by its image. The dialpad and other devices
@@ -97,9 +109,9 @@ or focus applications, send shortcuts, take screenshots or open the Action Ring.
 Both selection pages show each device's reported battery percentage beside its
 connection dot beneath the device. No percentage appears when battery data is
 unavailable.
-Discovery does not pair Bluetooth devices. Only explicit button assignments
-enable button capture; the dialpad and MX Master 4 haptic panel use temporary
-per-button diversion.
+Discovery does not pair Bluetooth devices. Only explicit control assignments
+enable capture. Dialpad buttons, its large dial and the MX Master 4 haptic panel
+use separate HID++ diversion; the small roller is left unchanged.
 Connect just one supported keypad to use the editor; multiple keypads are
 shown individually, but their configuration cannot be targeted independently.
 Back controls return to the console or all devices. The Settings gear at the bottom left of every page opens
@@ -179,7 +191,7 @@ screen images or respond to the same button presses.
 
 The package supplies active-seat udev rules for the USB keypad `046d:c354`,
 Bluetooth dialpad `046d:bc00`, and `/dev/uinput`. These allow keypad output,
-temporary diversion of assigned dialpad buttons, and configured shortcut input.
+diversion of assigned dialpad buttons or the large dial, and configured shortcut input.
 G402 ring triggers use per-device X11 button grabs without extra device permissions.
 The rules do not grant access to reading other
 keyboards, change user groups, or make device files writable by everyone.
