@@ -13,7 +13,7 @@ community application, not Logitech's Logi Options+ software.
 Copy the `.deb` from `dist/` to the office PC, then run:
 
 ```sh
-sudo apt install ./mx-creative-control_0.3.2_amd64.deb
+sudo apt install ./mx-creative-control_0.4.0_amd64.deb
 mx-creative-control
 ```
 
@@ -255,7 +255,7 @@ file is included). Fetch the pinned build inputs, then assemble offline:
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.3.2_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.4.0_amd64.deb
 python3 scripts/source-archive.py
 ```
 

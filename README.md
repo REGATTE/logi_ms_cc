@@ -62,8 +62,8 @@ Fetch the pinned Qt runtime and locked Rust dependencies, then build and check t
 scripts/prepare-runtime.sh --download
 cargo fetch --locked --manifest-path worker/Cargo.toml
 scripts/build-deb.sh
-python3 scripts/check-package.py dist/mx-creative-control_0.3.2_amd64.deb
-sudo apt install ./dist/mx-creative-control_0.3.2_amd64.deb
+python3 scripts/check-package.py dist/mx-creative-control_0.4.0_amd64.deb
+sudo apt install ./dist/mx-creative-control_0.4.0_amd64.deb
 mx-creative-control
 ```
 

@@ -1,6 +1,25 @@
 # Validation
 
-Version 0.3.2. Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046d:c354`.
+Version 0.4.0. Target: Ubuntu 24.04.4 amd64, GNOME on X11, Logitech MX Creative Keypad USB `046d:c354`.
+
+## Version 0.4.0 checks (2026-11-20)
+
+All 643 Python tests, 110 Rust tests and eight Firefox-extension tests pass.
+Rust formatting and whitespace checks pass. Clippy passes with warnings denied
+and the existing `chunks_exact_to_as_chunks` lint exception for unchanged
+protocol code on the current toolchain.
+
+The source archive now includes the Firefox extension required by the package
+builder and excludes generated `*.egg-info` metadata. An isolated archive test
+checks these build inputs and the exclusion of personal configuration, favicon
+files and build caches. Release files contain bundled default profiles; personal
+layouts, device mappings and website shortcuts remain in the user's configuration
+directory outside the repository.
+
+The device and browser checks below record the earlier live development checks.
+Firefox was independently observed; Chrome was user-confirmed but not captured
+by local monitoring. Other browser variants and a fresh installation on another
+machine remain unverified.
 
 ## Version 0.3.2 checks
 
