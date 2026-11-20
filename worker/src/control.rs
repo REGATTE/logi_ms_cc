@@ -1,4 +1,4 @@
-use crate::config::{Action, Config, DeviceBinding, Page, WebsiteProfile};
+use crate::config::{Action, Config, DeviceBinding, Page, Profile, WebsiteProfile};
 use crate::website::{BrowserContext, BrowserReport, WebsiteSnapshot};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -67,6 +67,7 @@ pub struct State {
     pub status: Status,
     foreground: Foreground,
     launch_context: Option<LaunchContext>,
+    manual_page: bool,
     browser: BrowserContext,
     embedded: crate::embedded::Context,
 }
@@ -112,6 +113,7 @@ impl State {
             config,
             foreground: Foreground::default(),
             launch_context: None,
+            manual_page: false,
             browser: BrowserContext::default(),
             embedded: crate::embedded::Context::default(),
             status: Status {
@@ -188,12 +190,8 @@ impl State {
                 return &profile.page;
             }
         }
-        if self.status.page == 1 && self.config.auto_switch {
-            if let Some(p) = self.config.profiles.iter().find(|p| {
-                p.wm_classes
-                    .iter()
-                    .any(|c| c.eq_ignore_ascii_case(&self.status.active_app))
-            }) {
+        if self.status.page == 1 && self.automatic_paging_enabled() {
+            if let Some(p) = self.focused_profile() {
                 return &p.page;
             }
         }
@@ -204,6 +202,7 @@ impl State {
             return Err("page index must be 0 or 1".into());
         }
         self.launch_context = None;
+        self.manual_page = true;
         self.status.page = page;
         Ok(())
     }
@@ -216,7 +215,38 @@ impl State {
         }
         self.launch_context = None;
         self.status.manual_profile = id;
+        self.manual_page = !self.automatic_paging_enabled();
+        self.sync_automatic_page();
         Ok(())
+    }
+
+    fn automatic_paging_enabled(&self) -> bool {
+        self.config.auto_switch && self.status.session == "x11" && self.status.focus_supported
+    }
+
+    fn focused_profile(&self) -> Option<&Profile> {
+        if self.foreground.window == 0 {
+            return None;
+        }
+        self.config.profiles.iter().find(|profile| {
+            profile.wm_classes.iter().any(|class| {
+                self.foreground
+                    .identities
+                    .iter()
+                    .chain(std::iter::once(&self.foreground.name))
+                    .any(|identity| !identity.is_empty() && class.eq_ignore_ascii_case(identity))
+            })
+        })
+    }
+
+    fn sync_automatic_page(&mut self) {
+        if self.launch_context.is_none()
+            && self.status.manual_profile.is_none()
+            && !self.manual_page
+        {
+            self.status.page =
+                usize::from(self.automatic_paging_enabled() && self.focused_profile().is_some());
+        }
     }
 
     /// Arm a successful launcher action; only confirmed focus selects shortcuts.
@@ -229,14 +259,24 @@ impl State {
         confirmed_active: bool,
         now: Instant,
     ) -> bool {
-        let cancelled = self.cancel_launch();
-        if !self.config.auto_switch || self.status.session != "x11" || !self.status.focus_supported
-        {
-            return cancelled;
+        if !self.automatic_paging_enabled() {
+            return self.cancel_launch();
         }
         let Some(profile_id) = profile_id.filter(|id| self.profile_exists(id)) else {
-            return cancelled;
+            // A URL/document launcher may keep the same app in front. Retain
+            // its confirmed shortcuts until the foreground watcher sees it leave.
+            if self.launch_context.as_ref().is_some_and(|context| {
+                context.waiting_until.is_none() && context.matches(&self.foreground)
+            }) {
+                return false;
+            }
+            let previous_page = self.status.page;
+            let cancelled = self.cancel_launch();
+            self.sync_automatic_page();
+            return cancelled || self.status.page != previous_page;
         };
+        self.cancel_launch();
+        self.manual_page = false;
         let mut context = LaunchContext {
             desktop_id: desktop_id.into(),
             wm_classes: wm_classes.to_vec(),
@@ -259,6 +299,9 @@ impl State {
     pub fn focus_changed(&mut self, foreground: Foreground, now: Instant) -> bool {
         let changed = self.foreground != foreground;
         let previous_page = self.status.page;
+        if changed {
+            self.manual_page = false;
+        }
         self.status.active_app = foreground.name.clone();
         self.browser.focus_changed(&foreground);
         self.embedded.focus_changed(&foreground);
@@ -272,20 +315,22 @@ impl State {
                 self.cancel_launch();
             }
         }
+        self.sync_automatic_page();
         changed || expired || previous_page != self.status.page
     }
 
     /// Tracking failure must never leave shortcuts for an unconfirmed app.
     pub fn set_focus_supported(&mut self, supported: bool) -> bool {
+        let previous_page = self.status.page;
         self.status.focus_supported = supported;
         if !supported {
             self.browser.focus_changed(&Foreground::default());
             self.embedded.focus_changed(&Foreground::default());
             self.refresh_website_status(Instant::now());
-            self.cancel_launch()
-        } else {
-            false
+            self.cancel_launch();
         }
+        self.sync_automatic_page();
+        self.status.page != previous_page
     }
 
     /// The worker can fold this deadline into its existing blocking poll.
@@ -319,7 +364,11 @@ impl State {
             .as_ref()
             .and_then(|context| context.waiting_until)
             .is_some_and(|deadline| now >= deadline);
-        (launch_expired && self.cancel_launch()) || changed
+        let cancelled = launch_expired && self.cancel_launch();
+        if cancelled {
+            self.sync_automatic_page();
+        }
+        cancelled || changed
     }
 
     fn profile_exists(&self, id: &str) -> bool {
@@ -335,6 +384,12 @@ impl State {
     }
 
     pub fn reload(&mut self, config: Config) {
+        if self.config.auto_switch != config.auto_switch
+            && self.status.session == "x11"
+            && self.status.focus_supported
+        {
+            self.manual_page = false;
+        }
         self.config = config;
         self.refresh_website_status(Instant::now());
         if self.launch_context.as_ref().is_some_and(|context| {
@@ -356,6 +411,7 @@ impl State {
         {
             self.status.manual_profile = None;
         }
+        self.sync_automatic_page();
     }
 
     fn refresh_website_status(&mut self, now: Instant) {

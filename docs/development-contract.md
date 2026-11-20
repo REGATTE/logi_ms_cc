@@ -165,18 +165,19 @@ Pages have exactly nine optional keys. Supported action types: `launch`
 On X11, a launch action focuses an existing window matching its class candidates;
 only when no match exists is its desktop entry launched with `gtk-launch`, without
 a command shell. An assigned `profile_id` identifies the app's shortcut profile;
-an absent/null value means no automatic shortcut page for that key.
+an absent/null value does not establish a launch-specific profile, so normal
+focused-app matching still applies.
 
-With `auto_switch` enabled, pressing an app key arms automatic paging for that
-keypad-activated app: show its assigned shortcuts once it is active, keep them
-while it stays active, and return to Apps when focus leaves. Apps without a
-profile stay on Apps. Explicit physical/page controls and manual profile choices
-override automatic page selection. With `auto_switch` disabled, app activation
-still works but page selection remains manual. Ordinary focus changes do not
-initiate this keypad-activation flow by themselves. Activation waits at most
-12 seconds for confirmed foreground; expiry discards the pending context.
-Manual page/profile selection cancels that context, so later focus changes do
-not re-arm it. On Wayland, launch actions
+With `auto_switch` enabled on X11, the focused app's exact window class or desktop
+identity selects its configured profile regardless of how it was opened. Apps
+without a matching profile show Apps. Physical/page controls override automatic
+paging until foreground changes; a manually selected profile stays pinned until
+Follow active app clears it. Disabling automatic switching leaves pages manual.
+Keypad launch actions still wait at most 12 seconds for confirmed foreground
+before selecting their assigned profile; expiry discards that pending context
+and resumes normal foreground matching. Manual page/profile selection cancels
+the pending context. A URL/document launcher without its own profile retains
+the confirmed active app's shortcuts until focus leaves. On Wayland, launch actions
 launch the desktop entry; existing-window activation and automatic paging are
 unavailable. The keypad's two physical navigation buttons remain usable.
 

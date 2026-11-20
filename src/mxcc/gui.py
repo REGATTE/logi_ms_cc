@@ -746,7 +746,7 @@ class MainWindow(RoundedWindow):
         self.autostart_status = label("", "muted", True)
         layout.addWidget(self.autostart_status)
         self._update_autostart_status()
-        self.auto_switch = QCheckBox("Automatically show shortcuts after pressing an app key (X11)")
+        self.auto_switch = QCheckBox("Automatically show shortcuts for the active app (X11)")
         self.auto_switch.setChecked(self.settings["auto_switch"])
         self.auto_switch.toggled.connect(lambda value: self.setting_changed("auto_switch", value))
         layout.addWidget(self.auto_switch)
@@ -962,7 +962,7 @@ class MainWindow(RoundedWindow):
         self.auto_switch.setChecked(True)
         self.auto_switch.blockSignals(False)
         self.safe_save()
-        self.notice.setText("Automatic app shortcuts are enabled on X11. App keys switch pages while their app is active.")
+        self.notice.setText("Automatic app shortcuts are enabled on X11. Focusing an app shows its assigned shortcuts.")
 
     def refresh_keys(self, *_):
         if not self.runtime:

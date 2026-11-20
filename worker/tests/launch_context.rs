@@ -54,7 +54,7 @@ fn launch(state: &mut State, now: Instant) {
 }
 
 #[test]
-fn waits_for_target_focus_then_returns_to_apps_when_it_leaves() {
+fn waits_for_target_focus_then_follows_other_apps_when_it_leaves() {
     let mut state = state();
     let now = Instant::now();
     state.focus_changed(focus("Browser"), now);
@@ -71,11 +71,11 @@ fn waits_for_target_focus_then_returns_to_apps_when_it_leaves() {
     assert!(!state.tick(now + Duration::from_secs(60)));
     assert_eq!(state.page().name, "Editor");
     state.focus_changed(focus("Browser"), now + Duration::from_secs(61));
-    assert_eq!(state.status.page, 0);
-    assert_eq!(state.page().name, "Apps");
-    // Once focus leaves, another ordinary focus change does not re-arm it.
+    assert_eq!(state.status.page, 1);
+    assert_eq!(state.page().name, "Browser");
+    // Returning to the app selects its profile without another keypad launch.
     state.focus_changed(focus("Code"), now + Duration::from_secs(62));
-    assert_eq!(state.page().name, "Apps");
+    assert_eq!(state.page().name, "Editor");
 }
 
 #[test]
@@ -94,7 +94,56 @@ fn already_active_application_enters_shortcuts_without_another_focus_event() {
 }
 
 #[test]
-fn shared_profile_alias_does_not_count_as_the_launched_application() {
+fn unprofiled_launch_keeps_active_shortcuts_until_focus_leaves() {
+    let now = Instant::now();
+    for target_window in [None, Some(1)] {
+        let mut state = state();
+        state.focus_changed(focus("Code"), now);
+        launch(&mut state, now);
+
+        // URL/document launchers can open content in the current application
+        // without having a shortcut profile of their own.
+        let redraw = state.launch_succeeded(
+            "open-document.desktop",
+            &["open-document".into()],
+            None,
+            target_window,
+            target_window.is_some(),
+            now,
+        );
+        assert_eq!(state.page().name, "Editor");
+        assert!(!redraw);
+        assert_eq!(state.deadline(), None);
+        assert!(!state.tick(now + Duration::from_secs(20)));
+        let mut same_app = focus("Code");
+        same_app.window = 2;
+        state.focus_changed(same_app, now + Duration::from_secs(21));
+        assert_eq!(state.page().name, "Editor");
+
+        state.focus_changed(focus("Unassigned"), now + Duration::from_secs(22));
+        assert_eq!(state.page().name, "Apps");
+        state.focus_changed(focus("Code"), now + Duration::from_secs(23));
+        assert_eq!(state.page().name, "Editor");
+    }
+}
+
+#[test]
+fn unprofiled_launch_cancels_an_unconfirmed_launch() {
+    let now = Instant::now();
+    let mut state = state();
+    state.focus_changed(focus("Browser"), now);
+    launch(&mut state, now);
+    assert!(state.deadline().is_some());
+
+    assert!(state.launch_succeeded("open-document.desktop", &[], None, None, false, now));
+    assert_eq!(state.page().name, "Browser");
+    assert_eq!(state.deadline(), None);
+    state.focus_changed(focus("Code"), now);
+    assert_eq!(state.page().name, "Editor");
+}
+
+#[test]
+fn shared_profile_alias_cannot_confirm_a_launch_but_can_select_its_own_profile() {
     let mut state = state();
     let now = Instant::now();
     launch(&mut state, now);
@@ -103,11 +152,11 @@ fn shared_profile_alias_does_not_count_as_the_launched_application() {
     state.focus_changed(focus("Code"), now);
     assert_eq!(state.page().name, "Editor");
     state.focus_changed(focus("VSCodium"), now);
-    assert_eq!(state.page().name, "Apps");
+    assert_eq!(state.page().name, "Editor");
 }
 
 #[test]
-fn pending_launch_expires_and_late_focus_does_not_steal_the_page() {
+fn pending_launch_expires_then_focus_uses_normal_profiles() {
     let mut state = state();
     let now = Instant::now();
     launch(&mut state, now);
@@ -116,12 +165,13 @@ fn pending_launch_expires_and_late_focus_does_not_steal_the_page() {
     assert!(state.tick(deadline));
     assert_eq!(state.deadline(), None);
     state.focus_changed(focus("Code"), deadline);
-    assert_eq!(state.page().name, "Apps");
+    assert_eq!(state.page().name, "Editor");
 
     state.focus_changed(focus("Browser"), now);
     launch(&mut state, now);
     state.focus_changed(focus("Code"), now + Duration::from_secs(13));
-    assert_eq!(state.page().name, "Apps");
+    assert_eq!(state.page().name, "Editor");
+    assert_eq!(state.deadline(), None);
 }
 
 #[test]
@@ -135,7 +185,7 @@ fn explicit_navigation_and_profile_selection_cancel_pending_or_active_context() 
         }
         state.select_page(0).unwrap();
         state.focus_changed(focus("Code"), now);
-        assert_eq!(state.page().name, "Apps");
+        assert_eq!(state.page().name, if active { "Apps" } else { "Editor" });
         assert_eq!(state.deadline(), None);
 
         launch(&mut state, now);
@@ -157,11 +207,11 @@ fn invalid_manual_selection_does_not_cancel_active_context() {
     assert!(state.select_profile(Some("missing".into())).is_err());
     assert_eq!(state.page().name, "Editor");
     state.focus_changed(focus("Browser"), now);
-    assert_eq!(state.page().name, "Apps");
+    assert_eq!(state.page().name, "Browser");
 }
 
 #[test]
-fn no_profile_disabled_automation_and_unavailable_tracking_keep_apps_page() {
+fn launches_without_profiles_or_tracking_respect_automatic_paging_settings() {
     let now = Instant::now();
     for mode in [
         "no-profile",
@@ -171,7 +221,6 @@ fn no_profile_disabled_automation_and_unavailable_tracking_keep_apps_page() {
         "tracking-off",
     ] {
         let mut state = state();
-        state.focus_changed(focus("Code"), now);
         let profile = match mode {
             "no-profile" => None,
             "invalid-profile" => Some("absent"),
@@ -188,6 +237,7 @@ fn no_profile_disabled_automation_and_unavailable_tracking_keep_apps_page() {
                 Some("editor")
             }
         };
+        state.focus_changed(focus("Code"), now);
         assert!(!state.launch_succeeded(
             "code.desktop",
             &["Code".into()],
@@ -196,7 +246,15 @@ fn no_profile_disabled_automation_and_unavailable_tracking_keep_apps_page() {
             false,
             now
         ));
-        assert_eq!(state.page().name, "Apps", "{mode}");
+        assert_eq!(
+            state.page().name,
+            if matches!(mode, "no-profile" | "invalid-profile") {
+                "Editor"
+            } else {
+                "Apps"
+            },
+            "{mode}"
+        );
         assert_eq!(state.deadline(), None);
     }
 }
@@ -223,11 +281,11 @@ fn default_profile_is_supported_and_desktop_stem_can_identify_the_app() {
     state.focus_changed(focus("CODE"), now);
     assert_eq!(state.page().name, "General");
     state.focus_changed(focus("Browser"), now);
-    assert_eq!(state.page().name, "Apps");
+    assert_eq!(state.page().name, "Browser");
 }
 
 #[test]
-fn reload_keeps_valid_context_but_drops_removed_profile_or_launcher() {
+fn reload_keeps_valid_context_or_falls_back_to_the_foreground_profile() {
     let now = Instant::now();
     let mut state = state();
     state.focus_changed(focus("Code"), now);
@@ -248,10 +306,22 @@ fn reload_keeps_valid_context_but_drops_removed_profile_or_launcher() {
             }
             "launcher" => updated["pages"][0]["keys"][0] = Value::Null,
             "auto-switch" => updated["auto_switch"] = json!(false),
-            _ => updated["pages"][0]["keys"][0]["action"]["profile_id"] = json!("other"),
+            _ => {
+                updated["pages"][0]["keys"][0]["action"]["profile_id"] = json!("other");
+                updated["profiles"][0]["wm_classes"] = json!(["VSCodium"]);
+                updated["profiles"][1]["wm_classes"] = json!(["Browser", "Code"]);
+            }
         }
         state.reload(config(updated));
-        assert_eq!(state.page().name, "Apps", "{removal}");
+        assert_eq!(
+            state.page().name,
+            match removal {
+                "launcher" => "Editor",
+                "assignment" => "Browser",
+                _ => "Apps",
+            },
+            "{removal}"
+        );
         assert_eq!(state.deadline(), None);
     }
 }

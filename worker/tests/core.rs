@@ -1,10 +1,11 @@
 use mx_creative_worker::{
     config::Config,
-    control::{Request, State},
+    control::{Foreground, Request, State},
     input::parse_chord,
     protocol::{image_ack, image_packets, Edges, ImageAck, Press},
 };
 use serde_json::{json, Value};
+use std::time::Instant;
 
 fn config_value() -> Value {
     json!({"version":1,"auto_switch":true,"pages":[{"name":"Apps","keys":[null,null,null,null,null,null,null,null,null]},{"name":"Shortcuts","keys":[null,null,null,null,null,null,null,null,null]}],"profiles":[]})
@@ -193,7 +194,17 @@ fn contextual_page_matches_class_without_replacing_app_launchers() {
     let profile = json!({"id":"code","wm_classes":["Code"],"page":{"name":"VS Code","keys":[null,null,null,null,null,null,null,null,null]}});
     value["profiles"] = json!([profile]);
     let mut state = State::new(serde_json::from_value(value).unwrap(), "x11".into());
-    state.status.active_app = "code".into();
+    state.set_focus_supported(true);
+    state.focus_changed(
+        Foreground {
+            window: 1,
+            name: "code".into(),
+            identities: vec!["code".into()],
+        },
+        Instant::now(),
+    );
+    assert_eq!(state.page().name, "VS Code");
+    state.select_page(0).unwrap();
     assert_eq!(state.page().name, "Apps");
     state.select_page(1).unwrap();
     assert_eq!(state.page().name, "VS Code");
@@ -202,8 +213,15 @@ fn contextual_page_matches_class_without_replacing_app_launchers() {
     state.config.auto_switch = false;
     assert_eq!(state.page().name, "Shortcuts");
     state.config.auto_switch = true;
-    state.status.active_app = "unknown".into();
-    assert_eq!(state.page().name, "Shortcuts");
+    state.focus_changed(
+        Foreground {
+            window: 2,
+            name: "unknown".into(),
+            identities: vec![],
+        },
+        Instant::now(),
+    );
+    assert_eq!(state.page().name, "Apps");
 }
 
 #[test]

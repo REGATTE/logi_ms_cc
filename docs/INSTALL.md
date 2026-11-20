@@ -126,11 +126,13 @@ immediately. Shortcut profiles keep their explicit slot positions.
 
 On X11, pressing an app key focuses an existing matching window. The app is
 launched only when no matching window exists. With automatic switching enabled,
-an app activated from the keypad shows its assigned shortcuts while it remains
-active; leaving that app returns the keypad to Apps. Apps without an assigned
-profile stay on Apps. Using the physical arrow buttons or a manual profile
-overrides automatic page choices. Disabling automatic switching leaves page
-selection manual while app keys still focus or launch their applications.
+focusing an app shows its assigned shortcuts regardless of how it was opened.
+Switching to another app selects that app's profile, or Apps if it has none.
+Physical arrow buttons override automatic page choices until focus changes.
+Manual profiles stay selected until **Follow active app** is used. Website or
+document launchers that keep the same app active also keep its shortcuts visible.
+Disabling automatic switching leaves page selection manual while app keys still
+focus or launch their applications.
 
 The Rust worker stays in the background and owns the tray icon. Opening settings
 starts the Qt process; closing settings releases that process. Ubuntu's default
