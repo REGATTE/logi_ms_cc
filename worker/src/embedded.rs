@@ -1,4 +1,4 @@
-//! Private, short-lived context from the worker-owned ChatGPT accessibility helper.
+//! Private, short-lived context from the worker-owned browser accessibility helper.
 //! These reports are never accepted through the public browser-context IPC endpoint.
 use crate::{config::valid_domain, control::Foreground, website::WebsiteSnapshot};
 use serde::{Deserialize, Serialize};
@@ -10,8 +10,21 @@ pub fn is_chatgpt(foreground: &Foreground) -> bool {
     foreground.window != 0 && foreground.name.eq_ignore_ascii_case("chatgpt")
 }
 
+pub fn browser_kind(foreground: &Foreground) -> Option<&'static str> {
+    if is_chatgpt(foreground) {
+        Some("chatgpt")
+    } else if crate::website::is_firefox(foreground) {
+        Some("firefox")
+    } else if crate::browser_catalog::is_browser(foreground) {
+        Some("browser")
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Target {
+    pub browser: String,
     pub window: u32,
     pub pid: u32,
     pub domains: Vec<String>,
@@ -39,6 +52,7 @@ pub struct Observation {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Status {
+    pub browser: Option<String>,
     pub available: bool,
     pub connected: bool,
     pub errors: Vec<String>,
@@ -57,6 +71,11 @@ pub struct Context {
 }
 
 impl Context {
+    fn matches_foreground(&self, foreground: &Foreground) -> bool {
+        browser_kind(foreground) == Some(self.target.browser.as_str())
+            && foreground.window == self.target.window
+    }
+
     pub fn target(&mut self, target: Target) {
         if self.target != target {
             self.target = target;
@@ -130,14 +149,14 @@ impl Context {
             })
         {
             self.snapshot = None;
-            return invalid("Invalid ChatGPT website context report");
+            return invalid("Invalid browser accessibility context report");
         }
         if self.revision.is_some_and(|revision| {
             report.revision < revision
                 || report.revision == revision && report.domain != self.last_domain
         }) {
             self.snapshot = None;
-            return invalid("Stale ChatGPT website context revision");
+            return invalid("Stale browser accessibility context revision");
         }
         self.available = report.ready;
         self.error = report.error;
@@ -148,15 +167,21 @@ impl Context {
         if now.saturating_duration_since(observation.received) >= CONTEXT_TTL
             || !report.ready
             || self.error.is_some()
-            || !is_chatgpt(foreground)
-            || foreground.window != self.target.window
+            || !self.matches_foreground(foreground)
             || pid == 0
             || pid != self.target.pid
         {
             return Ok(());
         }
         if let Some(domain) = report.domain {
+            let source = match self.target.browser.as_str() {
+                "chatgpt" => "chatgpt",
+                "firefox" => "firefox_accessibility",
+                "browser" => "browser_accessibility",
+                _ => return Ok(()),
+            };
             self.snapshot = Some(WebsiteSnapshot::embedded(
+                source,
                 domain,
                 report.window,
                 report.pid,
@@ -169,7 +194,7 @@ impl Context {
     }
 
     pub fn focus_changed(&mut self, foreground: &Foreground) {
-        if !is_chatgpt(foreground) || foreground.window != self.target.window {
+        if !self.matches_foreground(foreground) {
             self.snapshot = None;
         }
     }
@@ -178,7 +203,7 @@ impl Context {
         self.snapshot
             .as_ref()
             .filter(|snapshot| {
-                is_chatgpt(foreground)
+                self.matches_foreground(foreground)
                     && foreground.window == snapshot.window
                     && self.expires.is_some_and(|expiry| now < expiry)
             })
@@ -193,12 +218,14 @@ impl Context {
         if self.expires.is_some_and(|expiry| now >= expiry) {
             self.snapshot = None;
             self.expires = None;
-            self.error = Some("ChatGPT website detection is not responding.".into());
+            self.error = Some("Automatic website detection is not responding.".into());
         }
     }
 
     pub fn status(&self, now: Instant) -> Status {
         Status {
+            browser: (self.target.window != 0 && !self.target.browser.is_empty())
+                .then(|| self.target.browser.clone()),
             available: self.available,
             connected: self.available && self.expires.is_some_and(|expiry| now < expiry),
             errors: self.error.iter().cloned().collect(),

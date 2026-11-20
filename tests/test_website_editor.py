@@ -313,10 +313,13 @@ def test_website_connection_status_distinguishes_active_and_default_profiles(edi
     editor.set_status({"browser_connected": True, "active_website": "other.example", "website_profile": None})
     assert "Using normal actions" in editor.connection.text()
     editor.set_status({"browser_connected": False})
-    assert "not connected" in editor.connection.text()
+    assert "connect automatically" in editor.connection.text()
+    assert "Set up Firefox" not in editor.connection.text()
 
 
-@pytest.mark.parametrize("source, label", [("firefox", "Firefox"), ("chatgpt", "ChatGPT embedded browser")])
+@pytest.mark.parametrize("source, label", [("firefox", "Firefox"),
+    ("firefox_accessibility", "Firefox automatic"), ("chatgpt", "ChatGPT embedded browser"),
+    ("browser_accessibility", "Browser automatic")])
 def test_website_status_names_actual_source_even_if_other_provider_has_error(editor, source, label):
     editor.set_status({"active_website": "10.64.192.14", "website_source": source,
                        "website_profile": "10.64.192.14", "browser_error": "Firefox disconnected",
@@ -326,7 +329,7 @@ def test_website_status_names_actual_source_even_if_other_provider_has_error(edi
     assert editor.connection.text() == f"{label} · example.com · Using normal actions"
 
 
-def test_embedded_errors_are_only_shown_in_chatgpt_context(editor):
+def test_accessibility_errors_are_only_shown_for_supported_foreground_browsers(editor):
     status = {"active_app": "Chatgpt", "browser_error": "Firefox disconnected",
               "embedded_browser": {"available": False, "connected": False,
                                    "errors": ["Accessibility unavailable", "Restart the browser"]}}
@@ -334,7 +337,7 @@ def test_embedded_errors_are_only_shown_in_chatgpt_context(editor):
     assert editor.connection.text() == "ChatGPT embedded browser · Accessibility unavailable · Restart the browser"
     assert "Firefox" not in editor.connection.text()
     editor.set_status({**status, "active_app": "Firefox"})
-    assert editor.connection.text() == "Firefox · Firefox disconnected"
+    assert editor.connection.text() == "Firefox automatic · Accessibility unavailable · Restart the browser"
     editor.set_status({**status, "active_app": "chatgpt-helper"})
     assert "Accessibility unavailable" not in editor.connection.text()
 
@@ -347,8 +350,8 @@ def test_chat_or_address_bar_focus_uses_normal_actions_without_firefox_setup_err
     assert "Chat and the address bar use normal actions" in editor.connection.text()
     assert "Firefox" not in editor.connection.text()
     editor.set_status({"active_app": "Settings", "embedded_browser": {"available": True, "connected": True, "errors": []}})
-    assert "ChatGPT embedded browser ready" in editor.connection.text()
-    assert "Set up Firefox to use Firefox tabs" in editor.connection.text()
+    assert "Automatic website shortcuts ready" in editor.connection.text()
+    assert "your browser" in editor.connection.text()
     editor.set_status({"active_app": "Settings", "embedded_browser": {"available": True, "connected": False, "errors": []}})
     assert "Waiting for website focus" in editor.connection.text()
     assert "ready" not in editor.connection.text()
@@ -357,3 +360,48 @@ def test_chat_or_address_bar_focus_uses_normal_actions_without_firefox_setup_err
 def test_embedded_unavailable_status_does_not_appear_as_firefox_failure(editor):
     editor.set_status({"active_app": "Chatgpt", "embedded_browser": {"available": False, "connected": False, "errors": []}})
     assert editor.connection.text() == "ChatGPT embedded browser · Website detection is unavailable"
+
+
+@pytest.mark.parametrize("application", ["Firefox", "firefox_firefox", "org.mozilla.firefox", "firefox-esr"])
+def test_firefox_without_addon_reports_automatic_focus_guidance(editor, application):
+    editor.set_status({"active_app": application, "active_website": None,
+                       "browser_connected": False,
+                       "embedded_browser": {"available": True, "connected": True, "errors": []}})
+    assert "Firefox automatic" in editor.connection.text()
+    assert "Click inside a configured website" in editor.connection.text()
+    assert "address bar and text fields use normal actions" in editor.connection.text()
+    assert "Set up Firefox" not in editor.connection.text()
+
+
+def test_connected_firefox_addon_takes_precedence_over_accessibility_status(editor):
+    status = {"active_app": "firefox_firefox", "browser_connected": True,
+              "active_website": None,
+              "embedded_browser": {"available": False, "errors": ["Accessibility unavailable"]}}
+    editor.set_status(status)
+    assert "Firefox add-on connected" in editor.connection.text()
+    assert "Accessibility" not in editor.connection.text()
+    editor.set_status({**status, "browser_error": "More than one Firefox profile is connected"})
+    assert editor.connection.text() == "Firefox add-on · More than one Firefox profile is connected"
+
+
+@pytest.mark.parametrize("application", ["Google-chrome", "Brave-browser", "org.example.NewBrowser"])
+def test_other_browsers_use_worker_detection_instead_of_firefox_connection(editor, application):
+    status = {"active_app": application, "browser_connected": True,
+              "browser_error": "More than one Firefox profile is connected",
+              "embedded_browser": {"browser": "browser", "available": True,
+                                   "connected": True, "errors": []}}
+    editor.set_status(status)
+    assert editor.connection.text().startswith("Browser automatic · Click inside a configured website")
+    assert "Firefox" not in editor.connection.text()
+    status["embedded_browser"]["errors"] = ["Accessibility unavailable"]
+    editor.set_status(status)
+    assert editor.connection.text() == "Browser automatic · Accessibility unavailable"
+    status["embedded_browser"].update(errors=[], available=False)
+    editor.set_status(status)
+    assert editor.connection.text() == "Browser automatic · Website detection is unavailable"
+
+
+def test_firefox_automatic_unavailable_reports_provider_without_addon_instruction(editor):
+    editor.set_status({"active_app": "Firefox", "browser_connected": False,
+                       "embedded_browser": {"available": False, "connected": False, "errors": []}})
+    assert editor.connection.text() == "Firefox automatic · Website detection is unavailable"

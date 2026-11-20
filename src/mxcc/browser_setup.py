@@ -131,4 +131,4 @@ def setup_firefox() -> dict:
             archive.writestr(name, (source.parent / name).read_bytes())
     _write(package, output.getvalue(), 0o600)
     return {**installation_status(), "package_path": str(package),
-            "instructions": "In Firefox, open about:debugging#/runtime/this-firefox, choose Load Temporary Add-on, and select the extension manifest or ZIP. Allow the connection prompt if shown. Temporary installation lasts until Firefox restarts; permanent installation requires a Mozilla-signed extension."}
+            "instructions": "Website dial and button shortcuts connect automatically. For website-specific Action Rings, optionally install the Firefox add-on: open about:debugging#/runtime/this-firefox, choose Load Temporary Add-on, and select the extension manifest or ZIP. Allow the connection prompt if shown. Temporary installation lasts until Firefox restarts; permanent installation requires a Mozilla-signed extension."}

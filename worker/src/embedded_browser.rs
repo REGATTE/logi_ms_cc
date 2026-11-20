@@ -140,7 +140,9 @@ impl Helper {
         let mut bytes = serde_json::to_vec(&message)?;
         bytes.push(b'\n');
         if bytes.len() > 65536 {
-            return Err(io::Error::other("Embedded browser target is too large"));
+            return Err(io::Error::other(
+                "Browser accessibility target is too large",
+            ));
         }
         let deadline = Instant::now() + Duration::from_millis(100);
         let mut sent = 0;
@@ -149,7 +151,7 @@ impl Helper {
                 Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::WriteZero,
-                        "Embedded browser helper closed its input",
+                        "Browser accessibility helper closed its input",
                     ))
                 }
                 Ok(count) => sent += count,
@@ -157,7 +159,7 @@ impl Helper {
                     if Instant::now() >= deadline {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
-                            "Embedded browser helper stopped reading targets",
+                            "Browser accessibility helper stopped reading targets",
                         ));
                     }
                     let mut fd = libc::pollfd {
@@ -192,7 +194,7 @@ impl Helper {
                     }
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
-                        "ChatGPT website helper disconnected",
+                        "Browser accessibility helper disconnected",
                     ));
                 }
                 Ok(count) => count,
@@ -204,7 +206,7 @@ impl Helper {
                     latest = Some(serde_json::from_slice::<Report>(&self.buffer).map_err(
                         |error| {
                             io::Error::other(format!(
-                                "Invalid ChatGPT website helper report: {error}"
+                                "Invalid Browser accessibility helper report: {error}"
                             ))
                         },
                     )?);
@@ -217,7 +219,7 @@ impl Helper {
                 } else {
                     if self.buffer.len() >= MAX_LINE {
                         return Err(io::Error::other(
-                            "ChatGPT website helper report exceeded 4096 bytes",
+                            "Browser accessibility helper report exceeded 4096 bytes",
                         ));
                     }
                     self.buffer.push(*byte);
@@ -283,7 +285,7 @@ fn run(
                             generation,
                             received: Instant::now(),
                             result: Err(format!(
-                                "ChatGPT website detection is unavailable: {error}"
+                                "Browser accessibility detection is unavailable: {error}"
                             )),
                         },
                     );
@@ -298,12 +300,12 @@ fn run(
                     report = child.last_diagnostic.clone();
                 }
                 if child.closed && !report.as_ref().is_some_and(terminal_diagnostic) {
-                    return Err(io::Error::other("ChatGPT website helper exited"));
+                    return Err(io::Error::other("Browser accessibility helper exited"));
                 }
                 if child.last_output.elapsed() > MAX_SILENCE {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "ChatGPT website helper stopped responding",
+                        "Browser accessibility helper stopped responding",
                     ));
                 }
                 Ok(report)
@@ -400,8 +402,9 @@ mod tests {
 
     #[test]
     fn private_child_echoes_targets_and_drop_kills_and_reaps_only_owned_process() {
-        let script="import sys,json\nfor line in sys.stdin:\n t=json.loads(line); print(json.dumps(dict(window=t['window'],pid=t['pid'],target_revision=t['target_revision'],revision=t['target_revision'],domain=None,ready=True,error=None)),flush=True)\n";
+        let script="import sys,json\nfor line in sys.stdin:\n t=json.loads(line); assert t['browser'] in ('chatgpt','firefox',''); print(json.dumps(dict(window=t['window'],pid=t['pid'],target_revision=t['target_revision'],revision=t['target_revision'],domain=None,ready=True,error=None)),flush=True)\n";
         let target = Target {
+            browser: "firefox".into(),
             window: 42,
             pid: 1000,
             domains: vec!["10.64.192.14".into()],

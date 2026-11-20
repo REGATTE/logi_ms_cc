@@ -1,5 +1,10 @@
 # Firefox website shortcuts
 
+This add-on is optional. MX Creative Control automatically detects focused
+Firefox websites through Linux accessibility for button and large-dial shortcuts,
+including after Firefox restarts. Install the add-on for website-specific
+Action Rings or to use its tab-based context instead of accessibility detection.
+
 This extension reports the active tab's hostname, focus state and ephemeral
 browser window ID to the local MX Creative Control worker. It sends no URL paths, query strings, page content, titles,
 history, credentials or browsing data to a network service. Private windows and
@@ -13,7 +18,8 @@ Temporary Add-on**, and select this directory's `manifest.json` or the prepared
 ZIP. Allow the Firefox connection prompt if shown. The toolbar popup reports
 the connection and selected domain.
 
-A temporary add-on is removed when Firefox restarts. A permanent install on
+A temporary add-on is removed when Firefox restarts; dial and button shortcuts
+then use automatic detection without reloading it. A permanent install on
 release Firefox requires a Mozilla-signed extension; this development build is
 unsigned. Do not disable Firefox's signature verification. The same source can
 be submitted to Mozilla for unlisted signing when distributing the app.
@@ -28,6 +34,10 @@ The worker receives a five-second heartbeat and discards abandoned contexts
 after fifteen seconds. It applies website actions only to the matching
 foreground Firefox window. The extension retains its last-focused normal tab
 while the Action Ring holds OS focus so the ring can use the originating site.
+While connected, it takes priority over accessibility detection even when its
+domain is empty (for example in private windows). Without this add-on, a
+configured website can match in a private Firefox window because public
+accessibility metadata does not reliably identify private mode.
 
 References:
 

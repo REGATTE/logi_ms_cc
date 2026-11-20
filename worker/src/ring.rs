@@ -177,7 +177,7 @@ fn check_embedded_website_ring(
     if state
         .website_snapshot(foreground, now)
         .is_some_and(|snapshot| {
-            snapshot.source == "chatgpt"
+            snapshot.uses_accessibility()
                 && state
                     .config
                     .website_profiles
@@ -185,7 +185,7 @@ fn check_embedded_website_ring(
                     .any(|profile| profile.domain == snapshot.domain && profile.ring.is_some())
         })
     {
-        return Err("Website-specific Action Rings are supported in Firefox. In ChatGPT, use website dial or button shortcuts; the website pane must stay focused.".into());
+        return Err("Website-specific Action Rings require the Firefox extension. With automatic website detection, use website dial or button shortcuts; the website must stay focused.".into());
     }
     Ok(())
 }
@@ -594,24 +594,34 @@ mod tests {
     }
 
     #[test]
-    fn embedded_custom_site_ring_is_rejected_but_default_ring_survives_context_loss() {
+    fn chatgpt_custom_site_ring_is_rejected_but_default_ring_survives_context_loss() {
+        check_accessibility_ring_behavior("chatgpt");
+    }
+
+    #[test]
+    fn automatic_firefox_custom_site_ring_is_rejected_but_default_ring_survives_context_loss() {
+        check_accessibility_ring_behavior("firefox");
+    }
+
+    fn check_accessibility_ring_behavior(browser: &str) {
         use mx_creative_worker::embedded::{Observation, Report, Target};
         let mut value = json!({"version":1,"auto_switch":true,"profiles":[],
-            "pages":[{"name":"Apps","keys":[null,null,null,null,null,null,null,null,null]},
-                {"name":"Shortcuts","keys":[null,null,null,null,null,null,null,null,null]}],
-            "website_profiles":[{"domain":"example.com","device_actions":[],"ring":null}],
-            "action_ring":{"layouts":[{"id":"default","wm_classes":[],"slots":[]}],"bindings":[]}});
+        "pages":[{"name":"Apps","keys":[null,null,null,null,null,null,null,null,null]},
+            {"name":"Shortcuts","keys":[null,null,null,null,null,null,null,null,null]}],
+        "website_profiles":[{"domain":"example.com","device_actions":[],"ring":null}],
+        "action_ring":{"layouts":[{"id":"default","wm_classes":[],"slots":[]}],"bindings":[]}});
         let config = serde_json::from_value(value.clone()).unwrap();
         let mut state = State::new(config, "x11".into());
         let foreground = Foreground {
             window: 42,
-            name: "Chatgpt".into(),
-            identities: vec!["chatgpt".into()],
+            name: browser.into(),
+            identities: vec![browser.into()],
         };
         let now = Instant::now();
         state.focus_changed(foreground.clone(), now);
         state.embedded_target(
             Target {
+                browser: browser.into(),
                 window: 42,
                 pid: 1000,
                 domains: vec!["example.com".into()],
@@ -659,6 +669,7 @@ mod tests {
         state.reload(serde_json::from_value(value).unwrap());
         state.embedded_target(
             Target {
+                browser: browser.into(),
                 window: 42,
                 pid: 1000,
                 domains: vec!["example.com".into()],

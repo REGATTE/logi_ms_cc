@@ -126,6 +126,8 @@ impl State {
                     "website_profiles_v1".into(),
                     "dialpad_dial_v1".into(),
                     "embedded_browser_v1".into(),
+                    "firefox_accessibility_v1".into(),
+                    "browser_accessibility_v1".into(),
                 ],
                 pid: std::process::id(),
                 connected: false,
@@ -409,8 +411,13 @@ impl State {
     ) -> Option<WebsiteSnapshot> {
         if crate::embedded::is_chatgpt(foreground) {
             self.embedded.snapshot(foreground, now)
-        } else {
+        } else if crate::website::is_firefox(foreground) && self.browser.connected(now) {
+            // A connected extension is authoritative even when it reports no
+            // website (private windows, browser UI, or conflicting profiles).
+            // Accessibility must not override that deliberate null context.
             self.browser.snapshot(foreground, now)
+        } else {
+            self.embedded.snapshot(foreground, now)
         }
     }
 

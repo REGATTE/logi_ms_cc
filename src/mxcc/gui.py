@@ -396,11 +396,12 @@ class MainWindow(RoundedWindow):
             QMessageBox.warning(self, "Could not set up Firefox", str(error))
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("Connect Firefox")
+        dialog.setWindowTitle("Optional Firefox add-on")
         dialog.resize(620, 340)
         layout = QVBoxLayout(dialog)
         instructions = label(
-            "The local Firefox connection is ready.\n\n"
+            "Website dial and button shortcuts connect automatically. "
+            "This optional add-on enables website-specific Action Rings.\n\n"
             "1. Open Firefox setup below.\n"
             "2. Click Load Temporary Add-on.\n"
             "3. Select manifest.json in the extension folder.\n"

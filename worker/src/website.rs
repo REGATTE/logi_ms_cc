@@ -33,6 +33,7 @@ pub struct WebsiteSnapshot {
 
 impl WebsiteSnapshot {
     pub(crate) fn embedded(
+        source: &'static str,
         domain: String,
         window: u32,
         process: u32,
@@ -43,7 +44,7 @@ impl WebsiteSnapshot {
         Self {
             domain,
             window,
-            source: "chatgpt",
+            source,
             session: String::new(),
             browser_window: 0,
             revision,
@@ -54,7 +55,14 @@ impl WebsiteSnapshot {
     }
 
     pub fn matches_process(&self, pid: u32) -> bool {
-        self.source != "chatgpt" || self.process == pid && pid != 0
+        !self.uses_accessibility() || self.process == pid && pid != 0
+    }
+
+    pub fn uses_accessibility(&self) -> bool {
+        matches!(
+            self.source,
+            "chatgpt" | "firefox_accessibility" | "browser_accessibility"
+        )
     }
 }
 

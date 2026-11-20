@@ -1,4 +1,4 @@
-"""Read focused ChatGPT web-document metadata through Linux accessibility.
+"""Read focused browser document metadata through Linux accessibility.
 
 The Rust worker embeds this standalone helper and starts it with system Python.
 It reads no page text, input contents, history or hidden document URLs. Only a
@@ -22,6 +22,7 @@ MAX_ANCESTORS = 48
 MAX_WINDOWS = 32
 HEARTBEAT_MS = 100
 RESOLVE_BUDGET = 0.2
+FOCUS_RECOVERY_INTERVAL = 0.5
 
 
 def canonical_domain(value):
@@ -47,11 +48,12 @@ class Target:
     window: int = 0
     pid: int = 0
     domains: tuple[str, ...] = ()
+    browser: str = ""
 
     @classmethod
     def parse(cls, value):
         if not isinstance(value, dict) or set(value) != {
-                "command", "target_revision", "window", "pid", "domains"} or value["command"] != "target":
+                "command", "target_revision", "window", "pid", "domains", "browser"} or value["command"] != "target":
             raise ValueError("Invalid embedded-browser target")
         for name, maximum in (("target_revision", 2**64 - 1), ("window", 2**32 - 1), ("pid", 2**31 - 1)):
             if type(value[name]) is not int or not 0 <= value[name] <= maximum:
@@ -60,9 +62,11 @@ class Target:
         if (not isinstance(domains, list) or len(domains) > 128
                 or not all(canonical_domain(domain) for domain in domains)
                 or len(set(domains)) != len(domains)
-                or bool(value["window"]) != bool(value["pid"])):
+                or bool(value["window"]) != bool(value["pid"])
+                or value["browser"] not in ("", "chatgpt", "firefox", "browser")
+                or (value["window"] and value["browser"] == "")):
             raise ValueError("Invalid embedded-browser website list")
-        return cls(value["target_revision"], value["window"], value["pid"], tuple(domains))
+        return cls(value["target_revision"], value["window"], value["pid"], tuple(domains), value["browser"])
 
 
 @dataclass
@@ -85,6 +89,7 @@ class FocusTracker:
         self.current = None
         self.ready = False
         self.error = None
+        self.last_discovery = float("-inf")
 
     def emit(self):
         self.publish({"target_revision": self.target.target_revision,
@@ -105,6 +110,7 @@ class FocusTracker:
         if target == self.target:
             return
         self.target = target
+        self.last_discovery = float("-inf")
         self.clear()
         self.ready = False
         self.error = None
@@ -115,10 +121,14 @@ class FocusTracker:
         try:
             self.ready = self.adapter.connect(self.target, self.on_focus, self.on_invalidated)
             self.error = None if self.ready or not self.target.window else (
-                "ChatGPT accessibility is not ready. Click the video viewer to retry.")
+                "Firefox accessibility is not ready. If automatic setup was just enabled, restart Firefox once."
+                if self.target.browser == "firefox" else
+                "ChatGPT accessibility is not ready. Click the video viewer to retry."
+                if self.target.browser == "chatgpt" else
+                "Browser accessibility is not ready. If automatic setup was just enabled, restart the browser once.")
         except Exception:
             self.ready = False
-            self.error = "ChatGPT website detection is unavailable through Linux accessibility."
+            self.error = "Website detection is unavailable through Linux accessibility."
         self.emit()
         source = getattr(self.adapter, "last_source", None)
         if self.ready and self.target.window and source is not None:
@@ -144,6 +154,14 @@ class FocusTracker:
     def refresh(self):
         previous = self.current
         try:
+            # Browsers can load a background document or change windows without
+            # emitting another focused-state transition for the active viewer.
+            # Recover via fresh, bounded state metadata instead of stale nodes.
+            if (self.source is None and self.ready and self.target.window
+                    and self.target.browser in ("firefox", "browser")
+                    and time.monotonic() - self.last_discovery >= FOCUS_RECOVERY_INTERVAL):
+                self.last_discovery = time.monotonic()
+                self.source = self.adapter.focused_source()
             current = self.adapter.resolve(self.source, self.target) if self.source is not None else None
         except Exception:
             current = None
@@ -158,8 +176,9 @@ class FocusTracker:
 
 
 class AtspiAdapter:
-    def __init__(self, atspi):
+    def __init__(self, atspi, enable_accessibility=None):
         self.api = atspi
+        self.enable_accessibility = enable_accessibility
         self.app = None
         self.pid = 0
         self.listeners = []
@@ -187,6 +206,8 @@ class AtspiAdapter:
             # Keep only the last focus object's identity while another app is
             # active. No URI is read then; returning revalidates all metadata.
             return True
+        if self.enable_accessibility is not None:
+            self.enable_accessibility()
         if self.app is not None and self.pid == target.pid and len(self.listeners) == 4:
             try:
                 if not self.state(self.app, "DEFUNCT"):
@@ -234,7 +255,33 @@ class AtspiAdapter:
                 self.disconnect()
                 return False
             self.listeners.append((listener, event_type))
+        if target.browser in ("firefox", "browser"):
+            try:
+                self.last_source = self.focused_source()
+            except Exception:
+                # Some accessibility providers do not implement Collection.
+                # Future focus events can still establish a checked context.
+                self.last_source = None
         return True
+
+    def focused_source(self):
+        """Recover startup focus using state metadata, never names or hidden URLs."""
+        started = time.monotonic()
+        active = self.active_frames()
+        if len(active) != 1:
+            return None
+        collection = active[0].get_collection_iface()
+        if collection is None:
+            return None
+        match = self.api.CollectionMatchType
+        rule = self.api.MatchRule.new(
+            self.api.StateSet.new([self.api.StateType.FOCUSED, self.api.StateType.SHOWING]),
+            match.ALL, {}, match.ALL, [], match.ALL, [], match.ALL, False)
+        found = collection.get_matches(rule, self.api.CollectionSortOrder.CANONICAL, 2, True)
+        if (len(found) != 1 or time.monotonic() - started > RESOLVE_BUDGET
+                or self.active_frames() != active):
+            return None
+        return found[0]
 
     def active_frames(self):
         if self.app is None:
@@ -285,7 +332,20 @@ class AtspiAdapter:
                     read_attribute = document.get_document_attribute_value
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", DeprecationWarning)
-                    domain = document_domain(read_attribute("URI"))
+                    # Gecko exposes DocURL, Chromium and WebKit expose URI.
+                    # Unknown desktop browsers are tried by capability; never
+                    # replace a present invalid/unconfigured URI with another
+                    # attribute that could describe a different context.
+                    attributes = ("DocURL",) if target.browser == "firefox" else (
+                        ("URI", "DocURL") if target.browser == "browser" else ("URI",))
+                    domain = None
+                    for attribute in attributes:
+                        uri = read_attribute(attribute)
+                        if uri is not None and uri != "":
+                            domain = document_domain(uri)
+                            break
+                        if time.monotonic() - started > RESOLVE_BUDGET:
+                            return None
                 if domain not in target.domains:
                     return None
                 # Focus may change during synchronous metadata reads. Do not
@@ -299,6 +359,18 @@ class AtspiAdapter:
         return None
 
 
+def enable_linux_accessibility(gio, glib):
+    """Request the standard desktop accessibility bridge, without a screen reader."""
+    bus = gio.bus_get_sync(gio.BusType.SESSION, None)
+    args = ("org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties")
+    result = bus.call_sync(*args, "Get", glib.Variant("(ss)", ("org.a11y.Status", "IsEnabled")),
+                           None, gio.DBusCallFlags.NONE, 200, None)
+    if not result.unpack()[0]:
+        bus.call_sync(*args, "Set",
+                      glib.Variant("(ssv)", ("org.a11y.Status", "IsEnabled", glib.Variant("b", True))),
+                      None, gio.DBusCallFlags.NONE, 200, None)
+
+
 def main():
     def publish(value):
         print(json.dumps(value, separators=(",", ":")), flush=True)
@@ -306,17 +378,17 @@ def main():
     try:
         import gi
         gi.require_version("Atspi", "2.0")
-        from gi.repository import Atspi, GLib
+        from gi.repository import Atspi, Gio, GLib
     except (ImportError, ValueError):
         publish({"target_revision": 0, "window": 0, "pid": 0, "revision": 0,
                  "domain": None, "ready": False,
-                 "error": "Install python3-gi and gir1.2-atspi-2.0 for ChatGPT website shortcuts."})
+                 "error": "Install python3-gi and gir1.2-atspi-2.0 for automatic website shortcuts."})
         return 1
     Atspi.set_timeout(100, 100)
     Atspi.init()
     Atspi.set_main_context(GLib.MainContext.default())
     loop = GLib.MainLoop()
-    adapter = AtspiAdapter(Atspi)
+    adapter = AtspiAdapter(Atspi, lambda: enable_linux_accessibility(Gio, GLib))
     tracker = FocusTracker(adapter, publish)
     pending = bytearray()
     os.set_blocking(sys.stdin.fileno(), False)

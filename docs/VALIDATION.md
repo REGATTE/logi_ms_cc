@@ -223,3 +223,68 @@ With the settings process closed, the previously sampled worker used **5,604 KiB
 This release has not been validated on another physical keypad, Ubuntu release, CPU architecture, non-US keyboard layout, or a Wayland desktop. Wayland automatic application detection is unavailable; manual profiles remain available. Individual application shortcuts can differ with app versions and user keybindings. Tests validate mappings but do not assert every external app's response.
 
 Use the .deb on a second Ubuntu 24.04 amd64 PC and confirm app discovery, original artwork, page buttons, shortcut output, panel behavior, permissions and sign-in startup there before treating that deployment as verified.
+
+## Automatic Firefox dial recovery (2026-11-17)
+
+The live failure was a disconnected temporary Firefox add-on after a browser
+restart. The worker now uses the same supervised accessibility helper for
+Firefox button/dial profiles, reading Gecko's `DocURL` attribute and preserving
+exact application, window, process, configured-host, focus and revision checks.
+The optional native add-on remains authoritative while connected, including a
+null context; custom website rings still require that add-on.
+
+The helper requests Linux `org.a11y.Status.IsEnabled` when needed, without
+turning on a screen reader. On this Firefox Snap installation, AppArmor blocked
+the setting's change notification to the already-running browser. One normal
+Firefox restart picked up the enabled desktop setting. After that restart,
+`10.64.192.14` activated with source `firefox_accessibility`, the large dial was
+captured, and `browser_connected` remained false. The user confirmed both frame
+stepping directions worked without loading the add-on. Keypad and virtual-input
+access remained ready and all worker/backend error fields were clear. Local
+receipts are in `build/firefox-auto/live-check.json` and `live-status.jsonl`.
+The observation process was stopped after the check.
+
+All 622 Python tests and 104 Rust tests pass, with formatting/Clippy and whitespace
+checks passing. Regression coverage includes Gecko document attributes, automatic
+accessibility setup, startup focus discovery, background-document reload recovery,
+same-process window returns, editable-focus rejection, extension-null precedence,
+process/expiry guards and accessibility ring limitations. Focus recovery queries
+are bounded and throttled; they do not read page text or hidden document URLs.
+The release worker was rebuilt and upgraded live with `firefox_accessibility_v1`.
+Settings and runtime configuration hashes remained unchanged. Existing login
+startup was verified enabled; a new logout/login was not performed.
+
+## Automatic desktop browser discovery (2026-11-17)
+
+The automatic path now recognizes common Chromium, Gecko and WebKit browsers
+plus exact identities from installed `WebBrowser` desktop registrations. Desktop
+IDs and `StartupWMClass` are used; launch commands, page titles and generic
+Electron/Navigator classes are not. Reads are bounded, user desktop entries mask
+system entries, nonregular files are rejected, and catalog refreshes occur in a
+background thread every 30 seconds. Catalog generation changes cause foreground
+target reevaluation without restarting the worker.
+
+Generic browser targets read the nearest focused document's `URI`, falling back
+to Gecko's `DocURL` only when that attribute is absent. A present invalid or
+unconfigured URI never falls through to another document/attribute. Existing
+window, PID, noneditable-focus, revision, expiry and queued-input checks remain.
+A connected Firefox add-on takes precedence only inside Firefox; it cannot
+suppress another browser's automatic profile.
+
+All 642 Python tests and 110 Rust tests pass. Formatting, whitespace and Clippy
+checks pass (the existing `chunks_exact_to_as_chunks` lint exception is unchanged).
+New cases cover generic document metadata, missing/invalid attributes, restart
+and focus recovery, browser catalog bounds/precedence/refresh, generic status,
+Firefox connector isolation and process/expiry guards. The release worker was
+rebuilt and upgraded live to `browser_accessibility_v1`. Existing login startup
+selects that release binary. Settings and runtime hashes stayed unchanged.
+
+The upgraded worker automatically selected `10.64.192.14` in Firefox with the
+add-on disconnected and released the dial on return to ChatGPT's chat. The user
+reported both directions working in Chrome, but two local observation windows
+recorded only Firefox/ChatGPT and no Chrome foreground process; Chrome was also
+unavailable through the computer-use connector. This is user-reported Chrome
+behavior, not an independently captured Chrome hardware receipt. Other browser
+variants have engine/identity regression coverage and remain unverified on live
+installations. `build/browser-auto/live-check.json` records this evidence boundary.
+Both observation runs were stopped; the production worker/helper remain running.

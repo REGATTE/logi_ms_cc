@@ -1,3 +1,4 @@
+pub mod browser_catalog;
 pub mod config;
 pub mod control;
 pub mod dial;

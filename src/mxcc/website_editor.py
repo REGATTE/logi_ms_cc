@@ -130,10 +130,12 @@ class WebsiteEditor(QWidget):
         self.remove_button.clicked.connect(self._remove_dialog)
         top.addWidget(self.remove_button)
         self.setup_button = QPushButton("Set up Firefox")
+        self.setup_button.setToolTip("Optional add-on for website-specific Action Rings")
         self.setup_button.clicked.connect(self.setup_requested)
         top.addWidget(self.setup_button)
         layout.addLayout(top)
-        self.connection = QLabel("ChatGPT's embedded browser connects automatically. Set up Firefox to use Firefox tabs.")
+        self.connection = QLabel("Browser website shortcuts connect automatically. "
+                                 "The optional Firefox add-on enables website Action Rings.")
         self.connection.setWordWrap(True)
         self.connection.setObjectName("status")
         layout.addWidget(self.connection)
@@ -205,9 +207,9 @@ class WebsiteEditor(QWidget):
         self.custom_ring = QCheckBox("Use a separate Action Ring for this website")
         self.custom_ring.toggled.connect(self._toggle_ring)
         ring_layout.addWidget(self.custom_ring)
-        ring_hint = QLabel("Website-specific Action Rings work in Firefox. "
-                           "For ChatGPT, leave this unchecked to use its normal app or default ring. "
-                           "Website dial and button shortcuts work in both browsers.")
+        ring_hint = QLabel("Website-specific Action Rings require the Firefox add-on. "
+                           "Without it, leave this unchecked to use the normal app or default ring. "
+                           "Website dial and button shortcuts connect automatically in supported browsers.")
         ring_hint.setWordWrap(True)
         ring_hint.setObjectName("muted")
         ring_layout.addWidget(ring_hint)
@@ -424,13 +426,18 @@ class WebsiteEditor(QWidget):
         source = status.get("website_source")
         active_app = status.get("active_app")
         chatgpt_focused = isinstance(active_app, str) and active_app.casefold() == "chatgpt"
+        firefox_focused = isinstance(active_app, str) and active_app.casefold() in {
+            "firefox", "firefox_firefox", "org.mozilla.firefox", "firefox-esr"}
         embedded = status.get("embedded_browser", {})
         embedded = embedded if isinstance(embedded, dict) else {}
+        other_browser_focused = embedded.get("browser") == "browser"
         errors = embedded.get("errors", [])
         embedded_error = " · ".join(value for value in errors if isinstance(value, str)) if isinstance(errors, list) else ""
         if domain:
             suffix = "Website profile active" if status.get("website_profile") else "Using normal actions"
-            browser = "ChatGPT embedded browser" if source == "chatgpt" else "Firefox"
+            browser = {"chatgpt": "ChatGPT embedded browser",
+                       "firefox_accessibility": "Firefox automatic",
+                       "browser_accessibility": "Browser automatic"}.get(source, "Firefox")
             text = f"{browser} · {domain} · {suffix}"
         elif chatgpt_focused:
             if embedded_error:
@@ -440,16 +447,28 @@ class WebsiteEditor(QWidget):
             else:
                 text = ("ChatGPT embedded browser · Click inside a website to use its shortcuts. "
                         "Chat and the address bar use normal actions.")
+        elif firefox_focused and status.get("browser_connected"):
+            text = (f"Firefox add-on · {status['browser_error']}" if status.get("browser_error") else
+                    "Firefox add-on connected · Select a website tab to use its shortcuts")
+        elif firefox_focused or other_browser_focused:
+            browser = "Firefox automatic" if firefox_focused else "Browser automatic"
+            if embedded_error:
+                text = f"{browser} · {embedded_error}"
+            elif embedded.get("available") is False:
+                text = f"{browser} · Website detection is unavailable"
+            else:
+                text = (f"{browser} · Click inside a configured website to use its shortcuts. "
+                        "The address bar and text fields use normal actions.")
         elif status.get("browser_error"):
             text = f"Firefox · {status['browser_error']}"
         elif status.get("browser_connected"):
-            text = "Firefox connected · Select a website tab to use its shortcuts"
+            text = "Firefox add-on connected · Select a website tab to use its shortcuts"
         elif embedded.get("connected"):
-            text = "ChatGPT embedded browser ready · Click inside a website. Set up Firefox to use Firefox tabs."
+            text = "Automatic website shortcuts ready · Click inside a configured website in your browser."
         elif embedded.get("available"):
-            text = "ChatGPT embedded browser available · Waiting for website focus. Set up Firefox to use Firefox tabs."
+            text = "Automatic website shortcuts available · Waiting for website focus in your browser."
         else:
-            text = "ChatGPT's embedded browser connects automatically · Firefox is not connected; use Set up Firefox for Firefox tabs"
+            text = "Browser website shortcuts connect automatically · Waiting for browser status"
         self.connection.setText(text)
         self._refresh_dial_status()
 

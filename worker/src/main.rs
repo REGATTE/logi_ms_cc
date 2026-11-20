@@ -249,7 +249,7 @@ fn sync_dial_capture(
     }
 }
 
-type EmbeddedTargetKey = (Foreground, Vec<String>, bool);
+type EmbeddedTargetKey = (Foreground, Vec<String>, bool, u64);
 
 fn sync_embedded_target(
     state: &mut State,
@@ -268,17 +268,28 @@ fn sync_embedded_target(
         .map(|profile| profile.domain.clone())
         .collect();
     domains.sort();
-    let key = (state.foreground().clone(), domains, ring.is_open());
+    let key = (
+        state.foreground().clone(),
+        domains,
+        ring.is_open(),
+        mx_creative_worker::browser_catalog::generation(),
+    );
     if previous.as_ref() == Some(&key) {
         return;
     }
-    let active = mx_creative_worker::embedded::is_chatgpt(&key.0) && !key.1.is_empty() && !key.2;
+    let browser = mx_creative_worker::embedded::browser_kind(&key.0);
+    let active = browser.is_some() && !key.1.is_empty() && !key.2;
     let pid = if active {
         focus::window_pid(key.0.window).unwrap_or(0)
     } else {
         0
     };
     let next = mx_creative_worker::embedded::Target {
+        browser: if active && pid != 0 {
+            browser.unwrap_or_default().into()
+        } else {
+            String::new()
+        },
         window: if active && pid != 0 { key.0.window } else { 0 },
         pid,
         domains: if active && pid != 0 {
@@ -323,6 +334,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         "x11"
     };
     let mut state = State::new(config, session.into());
+    if session == "x11" {
+        mx_creative_worker::browser_catalog::start();
+    }
     let mut ring = ring::Ring::default();
     let buttons = if session == "x11" {
         Some(device_buttons::start(
@@ -697,7 +711,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         embedded_browser.as_ref().and_then(|helper| helper.take())
                     {
                         let foreground = focus::current().unwrap_or_default();
-                        let pid = if mx_creative_worker::embedded::is_chatgpt(&foreground) {
+                        let supported =
+                            mx_creative_worker::embedded::browser_kind(&foreground).is_some();
+                        let pid = if supported {
                             focus::window_pid(foreground.window).unwrap_or(0)
                         } else {
                             0
@@ -705,7 +721,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                         if !focus::is_ring(&foreground) {
                             redraw |= state.focus_changed(foreground.clone(), Instant::now());
                         }
-                        let active = mx_creative_worker::embedded::is_chatgpt(&foreground)
+                        let active = supported
                             && !ring.is_open()
                             && !state.config.website_profiles.is_empty();
                         if active
@@ -760,7 +776,7 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 let owner_matches = dial_capture
                     .as_ref()
                     .and_then(|capture| capture.website.as_ref())
-                    .filter(|snapshot| snapshot.source == "chatgpt")
+                    .filter(|snapshot| snapshot.uses_accessibility())
                     .is_none_or(|snapshot| {
                         snapshot.matches_process(focus::window_pid(snapshot.window).unwrap_or(0))
                     });

@@ -283,7 +283,7 @@ def test_missing_configuration_does_not_start_any_worker(lifecycle):
     popen.assert_not_called()
 
 
-@pytest.mark.parametrize("old_capability", ["device_actions_v1", "website_profiles_v1", "dialpad_dial_v1"])
+@pytest.mark.parametrize("old_capability", ["device_actions_v1", "website_profiles_v1", "dialpad_dial_v1", "embedded_browser_v1", "firefox_accessibility_v1"])
 def test_old_worker_is_verified_stopped_and_restarted_with_installed_unit(lifecycle, old_capability):
     unit, _, request, run, popen = lifecycle
     unit.write_text('[Service]\n')
